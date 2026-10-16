@@ -1,6 +1,6 @@
 {
-  "name": "EUQS Scorer",
-  "short_name": "EUQS Scorer",
+  "name": "Match Scorer",
+  "short_name": "Match Scorer",
   "description": "A live match scorer for buzzer quizzes. Works with no signal once it has been opened once.",
   "start_url": "./",
   "scope": "./",

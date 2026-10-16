@@ -1,4 +1,4 @@
-// Preset rules for the EUQS match scorer: one object per row of SPEC.md section 5, then the two
+// Preset rules for the match scorer: one object per row of SPEC.md section 5, then the two
 // trivia formats of section 5.1. Every preset holds every field of the Rules shape, so a match can
 // keep a full copy and edit any value. `source` is the spec's Source column, shown on the setup
 // screen; "unverified" wording is kept in the text, and `verified: false` marks the one preset

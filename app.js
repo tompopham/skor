@@ -788,7 +788,7 @@ function renderHome(root, state) {
     state.ui.clash ? clashCard(state.ui.clash) : null);
 
   root.append(
-    h('div', { class: 'top' }, h('h1', { tabindex: '-1' }, 'EUQS Scorer')),
+    h('div', { class: 'top' }, h('h1', { tabindex: '-1' }, 'Match Scorer')),
     menu,
     h('div', { class: 'notes' },
       h('p', { class: 'hint', id: 'device-note' }, 'Matches are kept on this device only. Nothing is sent anywhere. Save a backup file at halftime and at the end.'),
