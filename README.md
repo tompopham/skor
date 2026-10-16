@@ -1,6 +1,6 @@
-# EUQS match scorer
+# Match scorer
 
-A live match scorer for buzzer quizzes, made for the Edinburgh University Quiz Society (EUQS). One person keeps score of two teams while a reader asks the questions. Plain web page, no libraries, no sign-in, no server. It works with no signal once it has been opened once.
+A live match scorer for buzzer quizzes. One person keeps score of two teams while a reader asks the questions. Plain web page, no libraries, no sign-in, no server. It works with no signal once it has been opened once.
 
 **Use it:** https://tompopham.github.io/euqs-scorer/
 
