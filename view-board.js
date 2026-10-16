@@ -2,7 +2,7 @@
 // overtime (the quarter under trivia rules) and the last event, for a projector or a second screen. It is a
 // screen of this same page: a second tab or window opened at #board, or the Room board button on Home.
 //
-// It only listens. Asking and answering go over a BroadcastChannel named 'euqs-scorer': the board says
+// It only listens. Asking and answering go over a BroadcastChannel named 'skor': the board says
 // { kind: 'hello' } when it opens, and the scorer answers, and then says it again after every change, with
 // { kind: 'state', match } (app.js). If no answer comes within 2 s the board says "Waiting for the scorer".
 // The board never saves or changes anything; the one thing it reads from the device is the "hide player
@@ -13,7 +13,7 @@ import { loadSettings, KEYS } from './storage.js';
 import { h } from './dom.js';
 import { fmt, teamName, seatName, leftRight } from './view-common.js';
 
-export const CHANNEL_NAME = 'euqs-scorer';
+export const CHANNEL_NAME = 'skor';
 const WAIT_MS = 2000;
 
 // ---- What the board says ---------------------------------------------------------------------

@@ -1,6 +1,6 @@
 {
-  "name": "Match Scorer",
-  "short_name": "Match Scorer",
+  "name": "Skor",
+  "short_name": "Skor",
   "description": "A live match scorer for buzzer quizzes. Works with no signal once it has been opened once.",
   "start_url": "./",
   "scope": "./",

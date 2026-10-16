@@ -13,6 +13,7 @@ import { renderSetup } from './view-setup.js';
 import { renderScore } from './view-score.js';
 import { renderSheet, renderPast } from './view-sheet.js';
 import { renderBoard, stopBoard, CHANNEL_NAME } from './view-board.js';
+import { VERSION } from './version.js';
 
 // state.screen: which screen is showing. state.match: the match being scored, or null.
 // state.history: its undo/redo versions. state.ui: what the current screen is showing (a form
@@ -788,13 +789,14 @@ function renderHome(root, state) {
     state.ui.clash ? clashCard(state.ui.clash) : null);
 
   root.append(
-    h('div', { class: 'top' }, h('h1', { tabindex: '-1' }, 'Match Scorer')),
+    h('div', { class: 'top' }, h('div', {}, h('h1', { tabindex: '-1' }, 'Skor'), h('p', { class: 'tagline' }, 'Match scorer'))),
     menu,
     h('div', { class: 'notes' },
       h('p', { class: 'hint', id: 'device-note' }, 'Matches are kept on this device only. Nothing is sent anywhere. Save a backup file at halftime and at the end.'),
       isIosSafariTab()
         ? h('p', { class: 'hint', id: 'ios-hint' }, 'On an iPhone, Safari can clear a website\'s saved data after seven days unused. Tap Share, then Add to Home Screen, and open the scorer from there to keep your matches.')
-        : null));
+        : null,
+      h('p', { class: 'hint', id: 'version' }, `Version ${VERSION}`)));   // so a phone can show which version it runs
 }
 
 render();

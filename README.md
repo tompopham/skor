@@ -1,8 +1,8 @@
-# Match scorer
+# Skor
 
-A live match scorer for buzzer quizzes. One person keeps score of two teams while a reader asks the questions. Plain web page, no libraries, no sign-in, no server. It works with no signal once it has been opened once.
+Skor is a live match scorer for buzzer quizzes. One person keeps score of two teams while a reader asks the questions. Plain web page, no libraries, no sign-in, no server. It works with no signal once it has been opened once.
 
-**Use it:** https://tompopham.github.io/euqs-scorer/
+**Use it:** https://tompopham.github.io/skor/
 
 On an iPhone, open that address in Safari and use Share, then Add to Home Screen. A match is saved on the device you scored it on, and nowhere else. Save a backup file at halftime and at the end (Menu, then Save files).
 

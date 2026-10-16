@@ -387,7 +387,7 @@ export function toScoresheetHTML(match, d) {
 ${cycleTable(match, d, groups)}
 <p class="key">Each player's cell shows the points from the buzz: P is a power, N a wrong interruption, W a wrong answer after the question ended, S a Streak turn.</p>
 ${statsTables(match, d, groups)}
-<p class="foot">Unofficial scoresheet from the match scorer.</p>
+<p class="foot">Unofficial scoresheet from Skor.</p>
 </body>
 </html>
 `;

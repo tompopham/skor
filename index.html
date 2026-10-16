@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#ffffff">
-<title>Match Scorer</title>
+<title>Skor</title>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Match Scorer">
+<meta name="apple-mobile-web-app-title" content="Skor">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -35,6 +35,7 @@ button { font: inherit; color: inherit; touch-action: manipulation; -webkit-touc
 .btn.on, .btn[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 8px; }
 .top h1 { font-size: 18px; margin: 0; }
+.top .tagline { color: var(--muted); font-size: 13px; margin: 0; }
 .top .info { color: var(--muted); font-size: 13px; }
 .top .acts { display: flex; gap: 4px; }
 .teams { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -247,7 +248,7 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 <body>
 <div id="status" class="shell" role="status" aria-live="polite"></div>
 <main id="app" class="shell"></main>
-<noscript><p class="shell">The Match Scorer needs JavaScript. Turn it on for this site and reload.</p></noscript>
+<noscript><p class="shell">Skor needs JavaScript. Turn it on for this site and reload.</p></noscript>
 <script type="module" src="app.js"></script>
 </body>
 </html>
