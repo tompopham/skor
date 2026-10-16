@@ -5,7 +5,7 @@
 
 import { derive } from './engine.js';
 import { toScoresheetHTML, toCSV, resultLine, fileName, offerFile } from './files.js';
-import { listMatches, loadMatch, getCurrent } from './storage.js';
+import { listMatchesReport, loadMatch, getCurrent } from './storage.js';
 import { h } from './dom.js';
 import { ensureStyles } from './view-common.js';
 
@@ -46,6 +46,7 @@ const CSS = `
 
 const pad = number => String(number).padStart(2, '0');
 function dateOf(ms, withTime = false) {
+  if (typeof ms !== 'number') return '';               // no date saved: not 1 January 1970
   const date = new Date(ms);
   if (!Number.isFinite(date.getTime())) return '';
   const day = `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`;
@@ -221,7 +222,8 @@ export function renderPast(root, state, api) {
     if (!result.ok) say(result.error);
   };
 
-  const items = listMatches().map(describe);
+  const { entries, unreadable } = listMatchesReport();
+  const items = entries.map(describe);
   const list = items.length === 0
     ? h('p', { class: 'hint', id: 'past-empty' }, 'No matches are saved on this device yet.')
     : h('div', { class: 'pastlist', id: 'past-list' }, items.map(item => h('div', { class: item.damaged ? 'card past damaged' : 'card past', 'data-id': item.id },
@@ -238,5 +240,9 @@ export function renderPast(root, state, api) {
     h('div', { class: 'top' }, h('h1', { tabindex: '-1' }, 'Past matches'),
       h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn small', id: 'past-back', onclick: () => api.back() }, 'Back'))),
     h('p', { class: 'hint' }, 'Kept on this device only, newest first. View opens the scoresheet, where a question can be changed. Resume carries on scoring.'),
-    message, list);
+    message, ...(unreadable > 0 ? [unreadableNote(unreadable)] : []), list);
 }
+
+// Saved records that are neither listed nor deleted because they cannot be read (v2 2.2).
+const unreadableNote = count => h('p', { class: 'msg', id: 'past-unreadable' },
+  `${count} saved ${count === 1 ? 'match' : 'matches'} could not be read`);

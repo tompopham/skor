@@ -2,11 +2,13 @@
 // line, file names, and offering a file to the person (share sheet, else a download). The first
 // four are pure functions of the match record and derive()'s result of it, so they run under Node;
 // offerFile reaches for the browser only through `env`, and says so rather than throwing when
-// there is none. Teams are always in data order (team 0, then team 1), whichever side of the
-// screen they sit on, and stats are shown for people: "–" where there is nothing to divide by,
-// bonus conversion as a percentage, points per 20 and points per bonus to two decimals.
+// there is none. Teams are listed left team first, as on the screen (v2 2.4), by leftRight(); the
+// record itself is never reordered. Stats are shown for people: "–" where there is nothing to
+// divide by, bonus conversion as a percentage, points per 20 and points per bonus to two
+// decimals.
 
 import { FORMATS } from './engine.js';
+import { leftRight, repeatText } from './view-common.js';
 
 const DASH = '–';
 const TYPE_LABELS = { normal: 'Normal', picture: 'Picture', music: 'Music' };
@@ -14,9 +16,11 @@ const RESULT_WORDS = { power: 'power', ten: '10', neg: 'neg', wrong: 'wrong' };
 // The scoresheet's one- or two-letter marks for a result; a plain 10 has none.
 const RESULT_MARKS = { power: 'P', ten: '', neg: 'N', wrong: 'W' };
 // What derive()'s flags say in words. 'after-end' is a cycle left after the match ended (spec 6.4);
-// the others are entries an edit made impossible.
+// 'bonus-in-overtime' is bonus marks an edit left on an overtime starter (v2 2.3); the others are
+// entries an edit made impossible.
 const FLAG_WORDS = {
   'after-end': 'after the end of the match, not counted',
+  'bonus-in-overtime': 'bonus in overtime, not counted',
   jailed: 'check: a player in jail is entered',
   'double-jump-locked': 'check: a team locked out of this Double Jump is entered',
   'not-on-this-set': 'check: a player not on this Split set is entered',
@@ -29,6 +33,13 @@ const seatName = (match, team, seat) => String(match.teams[team].seats[seat] ?? 
 const playerName = (match, team, seat) => seatName(match, team, seat) || `seat ${seat + 1}`;
 const capitalise = text => text.charAt(0).toUpperCase() + text.slice(1);
 const pad = number => String(number).padStart(2, '0');
+// The day the match was started, as a Date, or null when the record has none: createdAt is missing, null
+// or not a finite number (new Date(null) would be 1 January 1970).
+function startDate(match) {
+  if (typeof match.createdAt !== 'number' || !Number.isFinite(match.createdAt)) return null;
+  const created = new Date(match.createdAt);
+  return Number.isFinite(created.getTime()) ? created : null;
+}
 
 const fixed = number => number.toFixed(2);
 const percent = ratio => `${(ratio * 100).toFixed(1)}%`;
@@ -119,8 +130,8 @@ function usedGroups(match, d) {
   return groups;
 }
 
-// Every seat with somebody in it, as [team, seat, stats]; an empty seat gets no stats.
-const namedPlayers = (match, d) => [0, 1].flatMap(team =>
+// Every seat with somebody in it, as [team, seat, stats], the left team's first; an empty seat gets no stats.
+const namedPlayers = (match, d) => leftRight(match).flatMap(team =>
   d.stats.players[team].flatMap((stats, seat) => (seatName(match, team, seat) === '' ? [] : [[team, seat, stats]])));
 
 // ---- The result line and the file name --------------------------------------------------------
@@ -131,11 +142,12 @@ function resultPieces(match, d) {
   const questions = d.cycles.filter(dc => !afterEnd(dc)).length;
   const et = d.phase.et ? ' (ET)' : '';
   const count = `${questions} ${questions === 1 ? 'question' : 'questions'}`;
-  return [['name', teamName(match, 0)], ['text', ` ${d.scores[0]}, `], ['name', teamName(match, 1)],
-    ['text', ` ${d.scores[1]}${et} (${match.rules.name}, ${count})`]];
+  const [left, right] = leftRight(match);
+  return [['name', teamName(match, left)], ['text', ` ${d.scores[left]}, `], ['name', teamName(match, right)],
+    ['text', ` ${d.scores[right]}${et} (${match.rules.name}, ${count})`]];
 }
 
-// "Edinburgh A 210, Glasgow 140 (UK quizbowl, 20 questions)"; a result that went to overtime under
+// "Edinburgh A 210, Glasgow 140 (UK quizbowl, 20 questions)", the left team first; a result that went to overtime under
 // rules that mark it (etLabel) is marked "(ET)". Questions are the cycles that count: one left after
 // the end of the match is not one.
 export function resultLine(match, d) {
@@ -150,12 +162,12 @@ function nameForFile(name, fallback) {
   return cleaned || fallback;
 }
 
-// "2026-10-10 Edinburgh A v Glasgow.csv": the day the match was started, on this device's clock.
+// "2026-10-10 Edinburgh A v Glasgow.csv": the day the match was started, on this device's clock (left
+// out when the record has no start date), then the left team first.
 export function fileName(match, ext) {
-  const created = new Date(match.createdAt);
-  const day = Number.isFinite(created.getTime())
-    ? `${created.getFullYear()}-${pad(created.getMonth() + 1)}-${pad(created.getDate())} ` : '';
-  const teams = [0, 1].map(team => nameForFile(match.teams[team].name, `Team ${'AB'[team]}`));
+  const created = startDate(match);
+  const day = created ? `${created.getFullYear()}-${pad(created.getMonth() + 1)}-${pad(created.getDate())} ` : '';
+  const teams = leftRight(match).map(team => nameForFile(match.teams[team].name, `Team ${'AB'[team]}`));
   const extension = String(ext ?? '').replace(/^\.+/, '');
   return `${day}${teams[0]} v ${teams[1]}${extension === '' ? '' : `.${extension}`}`;
 }
@@ -186,28 +198,29 @@ const csvRow = (values, figuresFrom = values.length) =>
 const BYTE_ORDER_MARK = '\uFEFF';
 
 // One row per cycle, then a blank line and a row per named player, then a blank line and a row per
-// team. A starter that nobody got says "dead" in the Bonus column. A cycle left after the end of
+// team, the left team's first throughout. A starter that nobody got says "dead" in the Bonus column. A cycle left after the end of
 // the match is listed with what happened and "after the end of the match, not counted" in its Type,
 // and its points left empty, since they are in no total.
 export function toCSV(match, d) {
-  const [a, b] = [0, 1].map(team => teamName(match, team));
+  const order = leftRight(match);
+  const [a, b] = order.map(team => teamName(match, team));
   const lines = [csvRow(['Question', 'Type', `${a} buzzes`, `${b} buzzes`, 'Bonus',
     `${a} points`, `${b} points`, `${a} total`, `${b} total`])];
   match.cycles.forEach((cycle, i) => {
     const dc = d.cycles[i];
     const status = statusWords(dc);
     const type = typeLabel(match, cycle, dc);
-    const points = afterEnd(dc) ? ['', ''] : dc.total;
+    const points = afterEnd(dc) ? ['', ''] : order.map(team => dc.total[team]);
     lines.push(csvRow([dc.number, status.length > 0 ? `${type} (${status.join('; ')})` : type,
-      teamEntries(match, cycle, dc, 0), teamEntries(match, cycle, dc, 1),
-      cycle.dead ? 'dead' : bonusWords(cycle, dc), ...points, ...dc.running]));
+      ...order.map(team => teamEntries(match, cycle, dc, team)),
+      cycle.dead ? 'dead' : bonusWords(cycle, dc), ...points, ...order.map(team => dc.running[team])]));
   });
   lines.push('', csvRow(['Player', 'Team', 'Seat', ...PLAYER_COLUMNS.map(c => c.header)]));
   for (const [team, seat, stats] of namedPlayers(match, d)) {
     lines.push(csvRow([seatName(match, team, seat), teamName(match, team), seat + 1, ...PLAYER_COLUMNS.map(c => c.value(stats))], 2));
   }
   lines.push('', csvRow(['Team', ...TEAM_COLUMNS.map(c => c.header)]));
-  d.stats.teams.forEach((stats, team) => lines.push(csvRow([teamName(match, team), ...TEAM_COLUMNS.map(c => c.value(stats))], 1)));
+  for (const team of order) lines.push(csvRow([teamName(match, team), ...TEAM_COLUMNS.map(c => c.value(d.stats.teams[team]))], 1));
   return `${BYTE_ORDER_MARK}${lines.join('\n')}\n`;
 }
 
@@ -255,10 +268,8 @@ const DETAIL_LABELS = [['competition', 'Competition'], ['round', 'Round'], ['ven
 function detailsLine(match) {
   const parts = DETAIL_LABELS.map(([key, label]) => [label, String(match.details?.[key] ?? '').trim()])
     .filter(([, text]) => text !== '').map(([label, text]) => `${label}: ${text}`);
-  const created = new Date(match.createdAt);
-  if (Number.isFinite(created.getTime())) {
-    parts.unshift(`Date: ${pad(created.getDate())}/${pad(created.getMonth() + 1)}/${created.getFullYear()}`);
-  }
+  const created = startDate(match);
+  if (created) parts.unshift(`Date: ${pad(created.getDate())}/${pad(created.getMonth() + 1)}/${created.getFullYear()}`);
   return parts.join(' · ');
 }
 
@@ -281,13 +292,14 @@ function seatMarks(cycle, dc, team, seat) {
 
 // Where each quarter ends: a row of text to put after the cycle at that index (-1: before the first).
 function quarterRows(match, d) {
+  const order = leftRight(match);
   const ends = match.markers.filter(marker => marker.type === 'quarter').flatMap(marker => {
     const index = marker.afterCycleId === null ? -1 : match.cycles.findIndex(c => c.id === marker.afterCycleId);
     return marker.afterCycleId !== null && index < 0 ? [] : [index];
   }).sort((x, y) => x - y);
   const rows = new Map();
   ends.forEach((index, k) => {
-    const [x, y] = index < 0 ? [0, 0] : d.cycles[index].running;
+    const [x, y] = index < 0 ? [0, 0] : order.map(team => d.cycles[index].running[team]);
     rows.set(index, [...(rows.get(index) ?? []), `End of quarter ${k + 1}: ${x} to ${y}`]);
   });
   return rows;
@@ -295,6 +307,7 @@ function quarterRows(match, d) {
 
 function cycleTable(match, d, groups) {
   const { rules } = match;
+  const order = leftRight(match);
   const showType = Boolean(rules.trivia) || rules.starterTypes.on || match.cycles.some(c => c.type !== 'normal');
   const extras = [['bonus', 'Bonus'], ['bounce', 'Bounce'], ['reward', 'Reward']].filter(([group]) => groups.has(group));
   const perTeam = 4 + extras.length + 2;
@@ -303,9 +316,9 @@ function cycleTable(match, d, groups) {
 
   const head1 = ['<th rowspan="2">Q</th>', showType ? '<th rowspan="2">Type</th>' : '',
     groups.has('bonus') ? '<th rowspan="2">Bonus set</th>' : '',
-    ...[0, 1].map(team => `<th colspan="${perTeam}">${nameHTML(teamName(match, team))}</th>`),
+    ...order.map(team => `<th colspan="${perTeam}">${nameHTML(teamName(match, team))}</th>`),
     '<th rowspan="2">Notes</th>'].join('');
-  const head2 = [0, 1].map(team => [
+  const head2 = order.map(team => [
     ...[0, 1, 2, 3].map(seat => `<th class="seat">${nameHTML(seatName(match, team, seat) || DASH)}</th>`),
     ...extras.map(([, label]) => `<th class="num">${label}</th>`),
     '<th class="num">Total</th>', '<th class="num">Running</th>',
@@ -321,7 +334,8 @@ function cycleTable(match, d, groups) {
     const controller = dc.bonusNumber === null ? null : cycle.buzzes.find(isCorrect)?.team;
     const notes = [cycle.dead ? 'Dead' : null,
       ...cycle.lostTurn.map(team => `${nameHTML(teamName(match, team))} lost its turn`),
-      ...[...statusWords(dc).map(capitalise), String(cycle.note ?? '').trim()].filter(Boolean).map(esc)].filter(Boolean);
+      ...[...statusWords(dc).map(capitalise), dc.bonusRepeatOf === null ? '' : repeatText(dc.bonusNumber, dc.bonusRepeatOf),
+        String(cycle.note ?? '').trim()].filter(Boolean).map(esc)].filter(Boolean);
     const teamCells = team => {
       const points = (value, shown) => numCell(counted && shown ? value : '');
       return [
@@ -337,7 +351,7 @@ function cycleTable(match, d, groups) {
     rows.push(`<tr class="cycle${counted ? '' : ' after-end'}"><td class="num">${dc.number}</td>`
       + (showType ? `<td>${esc(typeLabel(match, cycle, dc))}</td>` : '')
       + (groups.has('bonus') ? `<td class="set">${esc(bonusWords(cycle, dc))}</td>` : '')
-      + teamCells(0) + teamCells(1) + `<td class="notes">${notes.join('<br>')}</td></tr>`);
+      + order.map(teamCells).join('') + `<td class="notes">${notes.join('<br>')}</td></tr>`);
     rows.push(...markerRows(i));
   });
   const body = rows.length > 0 ? rows.join('\n') : `<tr><td colspan="${columns}">No questions yet.</td></tr>`;
@@ -349,8 +363,8 @@ function statsTables(match, d, groups) {
   const playerColumns = shown(PLAYER_COLUMNS), teamColumns = shown(TEAM_COLUMNS);
   const players = namedPlayers(match, d).map(([team, seat, stats]) => `<tr><td>${nameHTML(seatName(match, team, seat))}</td>`
     + `<td>${nameHTML(teamName(match, team))}</td>${playerColumns.map(c => numCell(c.value(stats))).join('')}</tr>`);
-  const teams = d.stats.teams.map((stats, team) => `<tr><td>${nameHTML(teamName(match, team))}</td>`
-    + `${teamColumns.map(c => numCell(c.value(stats))).join('')}</tr>`);
+  const teams = leftRight(match).map(team => `<tr><td>${nameHTML(teamName(match, team))}</td>`
+    + `${teamColumns.map(c => numCell(c.value(d.stats.teams[team]))).join('')}</tr>`);
   const heads = columns => columns.map(c => `<th class="num">${esc(c.header)}</th>`).join('');
   return `<section class="stats">
 <h2>Players</h2>
@@ -372,7 +386,7 @@ ${teams.join('\n')}
 // it is. Everything from the match record goes through esc().
 export function toScoresheetHTML(match, d) {
   const groups = usedGroups(match, d);
-  const title = `${teamName(match, 0)} v ${teamName(match, 1)}`;
+  const title = leftRight(match).map(team => teamName(match, team)).join(' v ');
   return `<!doctype html>
 <html lang="en-GB">
 <head>

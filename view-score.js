@@ -10,7 +10,7 @@ import { loadSettings, saveSettings } from './storage.js';
 import { resultLine } from './files.js';
 import { h } from './dom.js';
 import {
-  fmt, MINUS, teamName, seatName, leftRight, flagText, refusalText, STREAK_MAX, triviaFormats, select, check,
+  fmt, MINUS, teamName, seatName, leftRight, flagText, repeatText, refusalText, STREAK_MAX, triviaFormats, select, check,
 } from './view-common.js';
 import { renderCycleEditor, renderRulesEditor } from './view-editor.js';
 
@@ -118,11 +118,12 @@ function copyLine(text) {
 
 const backupButton = api => h('button', { type: 'button', class: 'btn', id: 'backup-now', onclick: () => api.offerBackup() }, 'Save a backup file');
 
-// "Edinburgh A 140, Glasgow 95 after 10": the scores after a cycle, in data order like the files.
+// "Edinburgh A 140, Glasgow 95 after 10": the scores after a cycle, the left team first like the files.
 function checkLine(match, d, cycleId = null) {
   const done = cycleId ? d.cycles.find(x => x.id === cycleId) : d.cycles.filter(x => x.closed).at(-1);
-  const [a, b] = done ? done.running : [0, 0];
-  return `${teamName(match, 0)} ${fmt(a)}, ${teamName(match, 1)} ${fmt(b)} after ${done ? done.number : 0}`;
+  const running = done ? done.running : [0, 0];
+  const [left, right] = leftRight(match);
+  return `${teamName(match, left)} ${fmt(running[left])}, ${teamName(match, right)} ${fmt(running[right])} after ${done ? done.number : 0}`;
 }
 
 // A short account of a cycle for the recent list.
@@ -396,6 +397,12 @@ function bonusPanel(c) {
 
   const rows = [h('p', { class: 'bonushead', id: 'bonushead' },
     `${held}Bonus ${bonus.number} for `, h('b', {}, ctrl), bounce ? `. A missed part goes to ${other}.` : '.')];
+  // Under next unused a typed number can be one that was already played (v2 2.1): its warning has a
+  // line of its own that is always there, empty or not, so no button moves when it appears.
+  if (rules.bonus.numbering === 'nextUnused') {
+    rows.push(h('p', { class: 'hint', id: 'bonus-repeat', style: 'color: var(--bad)' },
+      bonus.repeatOf === null ? '' : repeatText(bonus.number, bonus.repeatOf)));
+  }
   if (bounce) {
     rows.push(h('div', { class: 'part head bounce' }, h('span', {}), h('span', { style: 'grid-column: 2 / 4' }, ctrl), h('span', { style: 'grid-column: 4 / 6' }, `→ ${other}`)));
   }

@@ -21,8 +21,11 @@ const FLAG_TEXT = {
   jailed: 'a player who is in jail is entered',
   'double-jump-locked': 'a team locked out of this Double Jump is entered',
   'not-on-this-set': 'a player who is not on this Split set is entered',
+  'bonus-in-overtime': 'bonus in overtime',
 };
 export const flagText = flag => FLAG_TEXT[flag] ?? flag;
+// The warning for a typed bonus number that was already played (v2 2.1): `question` is the Q number that first played it.
+export const repeatText = (number, question) => `Bonus ${number} was already played at Q${question}`;
 
 // A refusal as a sentence for the person: the engine's "code: detail" without its code.
 export function refusalText(error) {

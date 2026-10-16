@@ -1,9 +1,10 @@
 // Saving on the device (spec section 7): the match records and a small index of them, the match
 // in progress, the saved player names and the settings, plus reading a backup file and the two
 // checks that stop one copy of a match writing over another. Every function takes the store as
-// its last argument (anything with getItem, setItem and removeItem, localStorage by default) and
-// none of them ever throws: a refused write comes back as { ok: false, error } and an unreadable
-// entry as null or an empty list, so a full or blocked store can never break the page.
+// its last argument (anything with getItem, setItem and removeItem, localStorage by default; a store
+// that also has keys() lets the list of matches be rebuilt from the records, v2 2.2) and none of
+// them ever throws: a refused write comes back as { ok: false, error } and an unreadable entry as
+// null or an empty list, so a full or blocked store can never break the page.
 
 import { derive } from './engine.js';
 
@@ -13,7 +14,8 @@ export const KEYS = {
   roster: 'scorer.roster',
   settings: 'scorer.settings',
 };
-export const matchKey = id => `scorer.match.${id}`;
+const MATCH_PREFIX = 'scorer.match.';
+export const matchKey = id => `${MATCH_PREFIX}${id}`;
 
 // What stands in when the browser has no localStorage at all, or will not even hand it over (a
 // blocked-storage setting can make reading `localStorage` itself throw).
@@ -22,9 +24,24 @@ const NO_STORE = {
   setItem() { throw new Error('This browser has no storage for saved matches'); },
   removeItem() { throw new Error('This browser has no storage for saved matches'); },
 };
+
+// The browser's localStorage, with the one thing it lacks: keys(), read from its length and key(i).
+// A storage object that cannot be walked that way is handed over without keys().
+function browserStore(local) {
+  const store = {
+    getItem: key => local.getItem(key),
+    setItem: (key, value) => local.setItem(key, value),
+    removeItem: key => local.removeItem(key),
+  };
+  if (typeof local.key === 'function' && Number.isInteger(local.length)) {
+    store.keys = () => Array.from({ length: local.length }, (_, i) => local.key(i)).filter(key => typeof key === 'string');
+  }
+  return store;
+}
 function defaultStore() {
   try {
-    return globalThis.localStorage ?? NO_STORE;
+    const local = globalThis.localStorage;
+    return local ? browserStore(local) : NO_STORE;
   } catch {
     return NO_STORE;
   }
@@ -64,22 +81,24 @@ const summaryOf = match => ({
   preset: match.rules.name,
 });
 
-// The entries in the index's text, minus anything in it that is not an entry. Text that is missing
-// or damaged reads as an empty index: the store cannot list its keys, so the matches a damaged
-// index named cannot be found again (they are still there).
-function entriesIn(text) {
-  let list = [];
+// The index's text as { sound, entries }: the entries in it, minus anything in it that is not an
+// entry, and whether the text was a list of nothing but entries. Text that is missing or damaged
+// reads as an empty, unsound index (listMatchesReport rebuilds it when the store can list its keys).
+function parseIndex(text) {
+  let list = null;
   try {
-    list = text === null || text === undefined ? [] : JSON.parse(text);
+    list = text === null || text === undefined ? null : JSON.parse(text);
   } catch {
-    list = [];
+    list = null;
   }
-  return Array.isArray(list) ? list.filter(entry => isObject(entry) && typeof entry.id === 'string') : [];
+  if (!Array.isArray(list)) return { sound: false, entries: [] };
+  const entries = list.filter(entry => isObject(entry) && typeof entry.id === 'string');
+  return { sound: entries.length === list.length, entries };
 }
 
 // The saved index. A store that cannot be read throws rather than reading as empty, so a failed read
 // never leads to the index being written over (the callers catch it).
-const readIndex = store => entriesIn(store.getItem(KEYS.index));
+const readIndex = store => parseIndex(store.getItem(KEYS.index)).entries;
 
 // Saves the whole record and updates its line in the index. The record goes first: if only the
 // index write fails the match is kept but this reports the failure, and the next save repairs the index.
@@ -106,14 +125,56 @@ export function loadMatch(id, store = defaultStore()) {
   }
 }
 
-// The index entries, newest change first (the later-created match first when changes tie).
-export function listMatches(store = defaultStore()) {
-  const newest = (a, b) => (b.changedAt ?? 0) - (a.changedAt ?? 0) || (b.createdAt ?? 0) - (a.createdAt ?? 0);
+// The ids of every match record the store holds, or null when the store cannot list its keys (or
+// throws doing so).
+function recordIds(store) {
+  if (typeof store.keys !== 'function') return null;
   try {
-    return readIndex(store).sort(newest);
+    return new Set(store.keys().filter(key => typeof key === 'string' && key.startsWith(MATCH_PREFIX) && key.length > MATCH_PREFIX.length)
+      .map(key => key.slice(MATCH_PREFIX.length)));
   } catch {
-    return [];
+    return null;
   }
+}
+
+const newest = (a, b) => (b.changedAt ?? 0) - (a.changedAt ?? 0) || (b.createdAt ?? 0) - (a.createdAt ?? 0);
+
+// The index entries, newest change first (the later-created match first when changes tie), and how
+// many saved records could not be read. The index is only a list of the records, so it is rebuilt
+// from them (v2 2.2) when the store can list its keys and the two disagree: the index is missing or
+// damaged, it names a record that is gone (that entry is dropped), or a record is not in it (found,
+// and listed if it can be read). The repaired index is saved. A record that cannot be read is
+// counted and left exactly where it is; an index entry whose record is there is kept as it is,
+// readable or not, for Past matches to show as damaged. A store with no keys() cannot be checked
+// against its records, so its index is listed as it stands, and a damaged one reads as empty.
+export function listMatchesReport(store = defaultStore()) {
+  try {
+    const text = store.getItem(KEYS.index);
+    const { sound, entries: listed } = parseIndex(text);
+    const present = recordIds(store);
+    if (present === null) return { entries: listed.sort(newest), unreadable: 0 };
+    const kept = listed.filter(entry => present.has(entry.id));
+    const known = new Set(kept.map(entry => entry.id));
+    const found = [];
+    let unreadable = 0;
+    for (const id of present) {
+      if (known.has(id)) continue;
+      const match = loadMatch(id, store);
+      if (match) found.push(summaryOf(match));
+      else unreadable += 1;
+    }
+    const entries = [...kept, ...found];
+    const unchanged = sound && kept.length === listed.length && found.length === 0;
+    const nothingToKeep = (text === null || text === undefined) && entries.length === 0;
+    if (!unchanged && !nothingToKeep) attempt(() => store.setItem(KEYS.index, JSON.stringify(entries)));
+    return { entries: entries.sort(newest), unreadable };
+  } catch {
+    return { entries: [], unreadable: 0 };
+  }
+}
+
+export function listMatches(store = defaultStore()) {
+  return listMatchesReport(store).entries;
 }
 
 // Removes the match, its index entry and, if it was the match in progress, that pointer too. The

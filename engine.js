@@ -739,33 +739,45 @@ function bonusPoints(cycle, rules) {
   return { ownBonus, bounce, reward };
 }
 
-// Bonus numbers (spec 5), worked out in order from the record: per cycle, the set it plays as
-// { number, heldKind }, or null when it plays none.
+// Bonus numbers (spec 5, v2 2.1), worked out in order from the record: per cycle, the set it plays as
+// { number, heldKind, repeatOf }, or null when it plays none. An overtime starter plays none: if an
+// edit left bonus marks on one, matchFlow has already set them aside (v2 2.3), so it takes no number.
 // - Paired: cycle n plays set n, so a dead or no-bonus cycle skips its set.
-// - Next unused: a counter starting at 1 moves on only when a bonus is played.
+// - Next unused: the lowest number from 1 up that no earlier cycle has played, hand-typed numbers
+//   included, so a number typed ahead is skipped later and the gap before it is filled first. A typed
+//   number that was already played is kept (it is what was read); `repeatOf` is then the question
+//   number of the cycle that first played it, and null otherwise.
 // - UC held sets (paired only): a dead picture or music cycle queues its set. The next correct
 //   normal starter plays the oldest held set instead of its own, which is skipped; a correct
 //   picture or music starter plays its own set and leaves the queue alone. The starter type is
 //   read from the record each time, so changing it during a bonus moves the set.
-// A hand override changes only the number shown on its own cycle. `closed` is per cycle.
-function bonusNumbers(match, closed) {
+// A hand override changes only the number shown on its own cycle (under next unused it also uses
+// that number up). `closed` and `overtime` are per cycle.
+function bonusNumbers(match, closed, overtime) {
   const { rules } = match;
   const paired = rules.bonus.numbering === 'paired';
   const heldSets = paired && rules.bonus.heldSets && rules.starterTypes.on;
   const queue = [];
-  let counter = 1;
+  const played = new Map();                       // next unused: each number played so far, and the question that first played it
+  const lowestUnused = () => { let number = 1; while (played.has(number)) number += 1; return number; };
   return match.cycles.map((cycle, index) => {
-    if (!playsBonus(cycle)) {
+    if (!playsBonus(cycle) || overtime[index]) {
       const dead = !answered(cycle) && closed[index];
       if (heldSets && dead && cycle.type !== 'normal') queue.push({ number: index + 1, kind: cycle.type });
       return null;
     }
-    let set = { number: paired ? index + 1 : counter++, heldKind: null };
+    let set = { number: paired ? index + 1 : lowestUnused(), heldKind: null };
     if (heldSets && cycle.type === 'normal' && queue.length > 0) {
       const held = queue.shift();
       set = { number: held.number, heldKind: held.kind };
     }
-    return { number: cycle.bonusNumberOverride ?? set.number, heldKind: set.heldKind };
+    const number = cycle.bonusNumberOverride ?? set.number;
+    let repeatOf = null;
+    if (!paired) {
+      repeatOf = played.get(number) ?? null;
+      if (repeatOf === null) played.set(number, index + 1);
+    }
+    return { number, heldKind: set.heldKind, repeatOf };
   });
 }
 
@@ -851,6 +863,11 @@ function scoreCycle(cycle, rules, entry) {
   };
 }
 
+// A cycle's points with its bonus counting for nothing: the tossup points are all it scores.
+const withoutBonus = scored => ({
+  ...scored, ownBonus: [0, 0], bounce: [0, 0], reward: [0, 0], total: [...scored.tossupPoints],
+});
+
 // The overtime rule for the nth overtime starter: under threeThenSuddenDeath the first three are
 // 'threeStarters', scored normally with rebounds; every other one is 'suddenDeath'.
 const overtimeMode = (rules, number) => (rules.overtime === 'threeThenSuddenDeath' && number <= 3 ? 'threeStarters' : 'suddenDeath');
@@ -880,6 +897,11 @@ function apartAfterABuzz(start, buzzes) {
 // point (spec 6.4): they are kept but take no part, so they are left out of the scores, are not
 // overtime and play no bonus round, and derive() flags them 'after-end'. `endAt` is the index of
 // the first of them, or null.
+// An overtime starter never carries a bonus (spec 4). An edit can still leave bonus marks on a cycle
+// that has become one (v2 2.3): the marks stay in the record, but the bonus counts for nothing. Its
+// bonus points are taken out of `scored` (the result's `scored` is the list to use from here on), the
+// cycle closes as soon as it is answered, as a live overtime starter does, it is not a bonus round,
+// and `bonusInOvertime` says which cycles they are, so derive() can flag them.
 function matchFlow(match, entries, scored) {
   const { rules, cycles, markers } = match;
   const n = cycles.length;
@@ -901,7 +923,8 @@ function matchFlow(match, entries, scored) {
   const endedMarker = markers.find(m => m.type === 'ended');
   let endAt = endedMarker ? boundaryAfter(endedMarker.afterCycleId) : null;
 
-  const closed = [], overtime = [], running = [];
+  const closed = [], overtime = [], running = [], bonusInOvertime = [];
+  const counted = [...scored];                           // what each cycle scores once the match's flow is known
   const score = [0, 0];
   let regulationEnd = null, level = false, overtimeCount = 0, decided = false, rounds = 0;
   for (let i = 0; i <= n; i++) {
@@ -917,23 +940,30 @@ function matchFlow(match, entries, scored) {
     if (endAt !== null && i >= endAt) {
       closed.push(isClosed(cycles[i], rules, entries[i]));
       overtime.push(false);
+      bonusInOvertime.push(false);
       running.push([...score]);
       continue;
     }
     const inOvertime = regulationEnd !== null && level;
     let isDone = isClosed(cycles[i], rules, entries[i]);
     let mode = null;
+    const setAside = inOvertime && playsBonus(cycles[i]);
+    if (setAside) {
+      counted[i] = withoutBonus(scored[i]);
+      isDone = true;
+    }
     if (inOvertime) {
       overtimeCount += 1;
       mode = overtimeMode(rules, overtimeCount);
-      if (mode === 'suddenDeath') isDone ||= apartAfterABuzz(score, scored[i].buzzes);
+      if (mode === 'suddenDeath') isDone ||= apartAfterABuzz(score, counted[i].buzzes);
     }
     closed.push(isDone);
     overtime.push(inOvertime);
-    for (const t of [0, 1]) score[t] += scored[i].total[t];
+    bonusInOvertime.push(setAside);
+    for (const t of [0, 1]) score[t] += counted[i].total[t];
     running.push([...score]);
     const finished = isDone || i < n - 1;
-    if (finished && playsBonus(cycles[i])) {
+    if (finished && playsBonus(cycles[i]) && !setAside) {
       rounds += 1;
       if (unit === 'bonusRounds' && rounds === length) ends.push(i + 1);
     }
@@ -954,7 +984,7 @@ function matchFlow(match, entries, scored) {
     overtimePhase = { mode: overtimeMode(rules, index), index };
   }
   return {
-    closed, overtime, running, endAt,
+    closed, overtime, running, endAt, scored: counted, bonusInOvertime,
     phase: {
       halftimeAfterCycleId: halftimeOf(match, closed, regulationEnd),
       regulationOver: regulationEnd !== null,
@@ -981,7 +1011,8 @@ function halftimeOf(match, closed, regulationEnd) {
 
 // ---- Stats (spec 6.6, research 6.1) ---------------------------------------------------------
 // Worked out from derive()'s own cycles, so they always agree with the scores. A cycle flagged
-// 'after-end' is left out of everything (R24), as it is left out of the scores. Points and tallies
+// 'after-end' is left out of everything (R24), as it is left out of the scores, and a bonus flagged
+// 'bonus-in-overtime' (v2 2.3) is left out of the bonuses heard and the parts. Points and tallies
 // count as soon as they are entered, so a team's stats add up to its score at every moment. A set
 // is a bonus heard as soon as it is opened (it is being read to the team, and a set cut off by the
 // gong still counts), so PPB never passes its maximum; a starter is heard once its cycle closes.
@@ -1046,7 +1077,7 @@ function statsOf(match, cycles, scores) {
       teams[t].bounce.points += derived.bounce[t];
       teams[t].rewards += derived.reward[t];
     }
-    if (playsBonus(cycle)) {
+    if (playsBonus(cycle) && !derived.flags.includes('bonus-in-overtime')) {
       const ctrl = controllingTeam(cycle);
       tallyParts(cycle, rules, teams[ctrl], teams[1 - ctrl]);
       teams[ctrl].bonusesHeard += 1;
@@ -1109,7 +1140,7 @@ function openState(match, cycle, set, entry, stage) {
 function openBonus(cycle, rules, set) {
   const { parts } = cycle.bonus;
   return {
-    team: controllingTeam(cycle), number: set.number, heldKind: set.heldKind,
+    team: controllingTeam(cycle), number: set.number, heldKind: set.heldKind, repeatOf: set.repeatOf,
     parts: parts.map(p => ({ ctrl: p.ctrl, other: p.other, offered: isOffered(p, rules) })),
     canPassRest: rules.bonus.passRest && parts.some(p => p.ctrl === null),
     canTotal: !bounceOn(rules),
@@ -1159,15 +1190,17 @@ function analyse(match) {
   const { rules } = match;
   const entries = cycleEntries(match);
   const scored = match.cycles.map((cycle, index) => scoreCycle(cycle, rules, entries[index]));
-  const { closed, overtime, running, endAt, phase } = matchFlow(match, entries, scored);
-  const sets = bonusNumbers(match, closed);
+  const { closed, overtime, running, endAt, phase, scored: counted, bonusInOvertime } = matchFlow(match, entries, scored);
+  const sets = bonusNumbers(match, closed, overtime);
   const afterEnd = index => endAt !== null && index >= endAt;
   const cycles = match.cycles.map((cycle, index) => ({
     id: cycle.id, number: index + 1, overtime: overtime[index],
     bonusNumber: sets[index]?.number ?? null, heldKind: sets[index]?.heldKind ?? null,
-    ...scored[index],
+    bonusRepeatOf: sets[index]?.repeatOf ?? null,
+    ...counted[index],
     running: running[index], closed: closed[index],
-    flags: [...cycleFlags(cycle, entries[index]), ...(afterEnd(index) ? ['after-end'] : [])],
+    flags: [...cycleFlags(cycle, entries[index]), ...(bonusInOvertime[index] ? ['bonus-in-overtime'] : []),
+      ...(afterEnd(index) ? ['after-end'] : [])],
   }));
   // Only the last cycle can be open; every earlier one is history. None is open once the match
   // has ended or waits to be ended.
