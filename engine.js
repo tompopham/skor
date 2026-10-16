@@ -870,10 +870,11 @@ function apartAfterABuzz(start, buzzes) {
 // closes; the length-th bonus round closes (dead starters are not bonus rounds); the cycle a
 // time-called marker sits on closes (a marker before the first cycle ends it at once); the last
 // quarter's marker is placed (trivia). If the scores are level then, overtime begins and ends the
-// match itself: under sudden death once an overtime starter closes with the scores apart, and a
-// buzz that leaves them apart closes it at once, with no rebound; under three starters, after the
-// third if the scores are apart, otherwise by sudden death from the fourth. Every cycle but the
-// last is history, so it counts as finished even if an edit left it open.
+// match itself, unless the rules have no overtime ('none', Consensus): a tie then stands, and
+// regulation ends as it does with the scores apart. Under sudden death the match ends once an
+// overtime starter closes with the scores apart, and a buzz that leaves them apart closes it at
+// once, with no rebound; under three starters, after the third if the scores are apart, otherwise
+// by sudden death from the fourth. Every cycle but the last is history, so it counts as finished even if an edit left it open.
 // The match ends at the first of: an ended marker; regulation ending with the scores apart (only
 // End match is left to do); overtime being decided. Only an edit can leave cycles after that
 // point (spec 6.4): they are kept but take no part, so they are left out of the scores, are not
@@ -909,7 +910,7 @@ function matchFlow(match, entries, scored) {
     const reached = i < n || n === 0 || closed[n - 1];
     if (!pastEnd && regulationEnd === null && reached && ends.includes(i)) {
       regulationEnd = i;
-      level = score[0] === score[1];
+      level = score[0] === score[1] && rules.overtime !== 'none';
       if (!level) endAt = i;
     }
     if (i === n) break;
@@ -1000,7 +1001,7 @@ const blankTeamStats = score => ({
 });
 
 // What one buzz adds to its player. A neg that cost nothing (a second team's, an unfined music or
-// picture buzz, or any interruption under PACE or Schools' Challenge) is a wrong, and also an
+// picture buzz, or any interruption under rules with no neg, such as PACE) is a wrong, and also an
 // interrupt with no penalty. A Jackpot answer is its result like any buzz.
 function tallyBuzz(player, buzz) {
   player.tossupPoints += buzz.points;

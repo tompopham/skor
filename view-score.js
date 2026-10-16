@@ -606,7 +606,8 @@ function banners(c) {
         h('button', { type: 'button', class: 'btn', onclick: () => api.go('home') }, 'Home'))));
   } else {
     if (open.stage === 'awaitingEnd') {
-      out.push(banner('Regulation is over', 'The scores are not level, so the match can only be ended.',
+      const tie = d.scores[0] === d.scores[1];
+      out.push(banner('Regulation is over', tie ? 'The scores are level and these rules have no overtime, so the match ends as a tie.' : 'The scores are not level, so the match can only be ended.',
         h('button', { type: 'button', class: 'btn primary', id: 'banner-end', onclick: () => endMatchFlow(c) }, 'End match')));
     } else if (phase.overtime) {
       const text = phase.overtime.mode === 'threeStarters'

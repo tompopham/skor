@@ -1,8 +1,10 @@
 // Preset rules for the match scorer: one object per row of SPEC.md section 5, then the two
 // trivia formats of section 5.1. Every preset holds every field of the Rules shape, so a match can
 // keep a full copy and edit any value. `source` is the spec's Source column, shown on the setup
-// screen; "unverified" wording is kept in the text, and `verified: false` marks the one preset
-// (Schools' Challenge) with no primary source at all.
+// screen; "unverified" wording is kept in the text, and `verified: false` would mark a preset with
+// no primary source at all (none since Schools' Challenge was cut). The BuzzerQuiz, QLL buzzer and
+// Schools' Challenge presets were cut on 16/10/2026 at Tom's request; a match saved under one keeps
+// its own copy of the rules, and test/helpers.mjs keeps their values for the tests.
 
 export const DEFAULT_PRESET_ID = 'ukqb';
 
@@ -101,61 +103,16 @@ export const PRESETS = [
     trivia: null,
   },
   {
-    presetId: 'buzzerquiz',
-    name: 'BuzzerQuiz',
-    source: 'BuzzerQuiz Official Rules, 1 Apr 2006',
-    verified: true,
-    tossup: { ten: 10, power: null, neg: -5, secondNeg: 0 },
-    starterTypes: { ...NO_STARTER_TYPES },
-    bonus: { parts: 3, partValue: 5, passRest: false, bounce: null, reward: 0, numbering: 'nextUnused', heldSets: false },
-    regulation: { length: null, unit: 'cycles', halftimeAfter: null },
-    lightningAfter: null,
-    overtime: 'threeThenSuddenDeath',
-    atTime: 'buzzMayAnswer',
-    etLabel: true,
-    trivia: null,
-  },
-  {
-    presetId: 'qll',
-    name: 'QLL buzzer',
-    source: 'QLL Buzzer Quiz Rules, 17 Jul 2024',
-    verified: true,
-    tossup: { ten: 10, power: 15, neg: -5, secondNeg: 0 },
-    starterTypes: { ...NO_STARTER_TYPES },
-    bonus: { parts: 3, partValue: 10, passRest: false, bounce: 5, reward: 0, numbering: 'nextUnused', heldSets: false },
-    regulation: { length: 20, unit: 'cycles', halftimeAfter: null },
-    lightningAfter: null,
-    overtime: 'suddenDeath',
-    atTime: 'finishCycle',
-    etLabel: false,
-    trivia: null,
-  },
-  {
-    presetId: 'sc',
-    name: "Schools' Challenge",
-    source: 'Secondary sources only (research 3.3)',
-    verified: false,
-    tossup: { ten: 10, power: null, neg: 0, secondNeg: 0 },
-    starterTypes: { ...NO_STARTER_TYPES },
-    bonus: { parts: 3, partValue: 10, passRest: false, bounce: 'same', reward: 10, numbering: 'paired', heldSets: false },
-    regulation: { length: null, unit: 'bonusRounds', halftimeAfter: null },
-    lightningAfter: 25,
-    overtime: 'suddenDeath',
-    atTime: 'finishCycle',
-    etLabel: false,
-    trivia: null,
-  },
-  {
     presetId: 'consensus',
     name: 'Consensus',
-    source: 'Consensus Trivia 2027 rules summary (consensustrivia.com), read 12/10/2026. No penalty for a wrong answer: unconfirmed',
+    source: 'Consensus Trivia Rules Summary, 2026-27 (consensustrivia.com/resources), checked 16/10/2026. A wrong answer scores 0: the rules give no penalty. A tie stands: the 2025-26 results list drawn games',
     verified: true,
     tossup: { ten: 10, power: null, neg: 0, secondNeg: 0 },
     starterTypes: { ...NO_STARTER_TYPES },
     bonus: { parts: 0, partValue: 0, passRest: false, bounce: null, reward: 0, numbering: 'nextUnused', heldSets: false },
     regulation: { length: null, unit: 'cycles', halftimeAfter: null },
     lightningAfter: null,
-    overtime: 'suddenDeath',
+    overtime: 'none',
     atTime: 'finishCycle',
     etLabel: false,
     trivia: { jackpot: [40, 30, 20, 10], streak: 5, shortJail: 'brick', quarters: 4 },
@@ -163,7 +120,7 @@ export const PRESETS = [
   {
     presetId: 'gradwrite',
     name: 'GradWrite',
-    source: 'GradWrite Gameplay Rules, 10 Mar 2026, and Question Formats, 26 May 2026 (gradwritetrivia.org), read 12/10/2026. No penalty for a wrong answer: unconfirmed',
+    source: 'GradWrite Gameplay Rules, 10 Mar 2026, and Question Formats, 26 May 2026 (gradwritetrivia.org/Resources), checked 16/10/2026. A wrong answer scores 0: the rules award no points for it. The rules say nothing on a tie, so sudden death is Skor\'s own choice',
     verified: true,
     tossup: { ten: 10, power: null, neg: 0, secondNeg: 0 },
     starterTypes: { ...NO_STARTER_TYPES },

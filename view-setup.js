@@ -182,7 +182,7 @@ export function rulesPanel(rules) {
     selectField(rules, 'Length counts', 'regulation.unit', [['cycles', 'Starters (cycles)'], ['bonusRounds', 'Bonus rounds']]),
     optionalNumber(rules, 'Halftime after', 'regulation.halftimeAfter', 10, { min: 1 }),
     optionalNumber(rules, 'Lightning round after (bonus rounds)', 'lightningAfter', 25, { min: 1 }),
-    selectField(rules, 'Overtime', 'overtime', [['suddenDeath', 'Sudden death'], ['threeThenSuddenDeath', 'Three starters, then sudden death']]),
+    selectField(rules, 'Overtime', 'overtime', [['suddenDeath', 'Sudden death'], ['threeThenSuddenDeath', 'Three starters, then sudden death'], ['none', 'None: a tie stands']]),
     selectField(rules, 'When time is called', 'atTime', [['finishCycle', 'Finish the cycle'], ['stopNow', 'Stop at once'], ['buzzMayAnswer', 'A buzz already in may answer']]),
     checkField(rules, 'Mark overtime results (ET)', 'etLabel')));
 

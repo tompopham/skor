@@ -136,8 +136,8 @@ function resultPieces(match, d) {
 }
 
 // "Edinburgh A 210, Glasgow 140 (UK quizbowl, 20 questions)"; a result that went to overtime under
-// BuzzerQuiz rules is marked "(ET)". Questions are the cycles that count: one left after the end of
-// the match is not one.
+// rules that mark it (etLabel) is marked "(ET)". Questions are the cycles that count: one left after
+// the end of the match is not one.
 export function resultLine(match, d) {
   return resultPieces(match, d).map(([, text]) => text).join('');
 }
