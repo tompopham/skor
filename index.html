@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#ffffff">
+<title>EUQS Scorer</title>
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="EUQS Scorer">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+/* Plain look on purpose (spec 2): black on white, grey square buttons, Arial, bordered tables, no
+   colour, no rounded corners or shadows, one light theme with an explicit white background.
+   A selected state is shown inverted (black). The base rules are copied from bare/scorer.html. */
+:root { --bg: #ffffff; --fg: #000000; --muted: #555555; --line: #999999; --btn: #eeeeee; --off: #f6f6f6; --offfg: #aaaaaa; --bad: #b00000; color-scheme: light; }
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+html, body { min-height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.35 Arial, Helvetica, sans-serif; }
+.shell { max-width: 900px; margin: 0 auto; padding-inline: 16px; }
+#status { padding-block: 0; }
+#app { padding-block: 8px 24px; }
+h1, h2 { overflow-wrap: anywhere; }
+h2 { font-size: 16px; margin: 0; }
+button { font: inherit; color: inherit; touch-action: manipulation; -webkit-touch-callout: none; }
+:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+.btn { appearance: none; border: 1px solid var(--line); background: var(--btn); border-radius: 0; min-height: 48px; padding: 0 12px; cursor: pointer; }
+.btn:disabled { color: var(--offfg); background: var(--off); border-color: #cccccc; cursor: default; }
+.btn.primary { font-weight: bold; }
+.btn.small { min-height: 48px; padding: 0 10px; }
+.btn.on, .btn[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 8px; }
+.top h1 { font-size: 18px; margin: 0; }
+.top .info { color: var(--muted); font-size: 13px; }
+.top .acts { display: flex; gap: 4px; }
+.teams { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.team { min-width: 0; display: grid; gap: 4px; align-content: start; }
+.tname { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--line); }
+.score { font: bold 40px/1.1 Arial, Helvetica, sans-serif; font-variant-numeric: tabular-nums; }
+.seat { appearance: none; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px; text-align: left; min-height: 52px; padding: 0 10px; border: 1px solid var(--line); background: var(--btn); border-radius: 0; cursor: pointer; min-width: 0; }
+.seat .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seat .pt { font-variant-numeric: tabular-nums; }
+.seat .key { color: var(--muted); font-size: 12px; margin-right: 6px; }
+.seat.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.seat.on .key { color: #cccccc; }
+.seat:disabled { color: var(--offfg); background: var(--off); border-color: #cccccc; cursor: default; }
+.bar { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 6px; }
+.row { display: flex; gap: 4px; flex-wrap: wrap; }
+.row > .btn { flex: 1 1 0; min-width: 64px; }
+.hint { color: var(--muted); font-size: 14px; margin: 0; overflow-wrap: anywhere; }
+.msg { color: var(--bad); font-size: 14px; min-height: 18px; margin: 0; overflow-wrap: anywhere; }
+.chips { display: flex; gap: 4px; }
+.chip { appearance: none; border: 1px solid var(--line); background: var(--btn); border-radius: 0; padding: 6px 12px; min-height: 48px; cursor: pointer; }
+.chip.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.part { display: grid; grid-template-columns: 80px 1fr 1fr; gap: 4px; align-items: center; }
+.part .lab { font-size: 14px; }
+.got.on, .miss.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.part.other .lab { color: var(--muted); }
+.card { border: 1px solid var(--line); padding: 10px; display: grid; gap: 8px; align-content: start; margin-bottom: 8px; min-width: 0; background: var(--bg); }
+label { font-size: 14px; display: grid; gap: 2px; min-width: 0; }
+input, select, textarea { font: 16px/1.3 Arial, Helvetica, sans-serif; padding: 8px; border: 1px solid var(--line); border-radius: 0; background: var(--bg); color: var(--fg); min-width: 0; width: 100%; min-height: 40px; }
+input[type="checkbox"], input[type="radio"] { width: 24px; height: 24px; min-height: 0; padding: 0; margin: 0; flex: none; accent-color: var(--fg); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } .score { font-size: 34px; } }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 4px 6px; border: 1px solid var(--line); white-space: nowrap; }
+th { background: var(--btn); }
+td.n, th.n { text-align: right; }
+.keys { font-size: 12px; color: var(--muted); }
+@media (max-width: 899px) { .keys { display: none; } }
+.dialog { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: grid; place-items: center; padding: 16px; }
+.dialog .card { max-width: 420px; width: 100%; }
+
+/* Save status, above every screen. */
+.notice { border: 1px solid var(--bad); color: var(--bad); padding: 8px; margin-top: 8px; display: grid; gap: 6px; overflow-wrap: anywhere; }
+.notice .btn { color: var(--fg); }
+
+/* Home */
+.menu { display: grid; gap: 8px; max-width: 480px; }
+.menu .btn { width: 100%; min-height: 56px; text-align: left; }
+.menu .card { margin: 0; }
+.card .msg:empty { display: none; }
+.resume-line { overflow-wrap: anywhere; }
+.notes { display: grid; gap: 8px; margin-top: 16px; max-width: 480px; }
+
+/* Setup */
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+legend { padding: 0; font-weight: bold; }
+.presets { display: grid; gap: 4px; }
+.presets legend { margin-bottom: 4px; }
+.preset { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; border: 1px solid var(--line); background: var(--btn); padding: 10px; min-height: 48px; cursor: pointer; font-size: 16px; }
+.preset.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.preset.on input { accent-color: var(--bg); }
+.preset .pbody { display: grid; gap: 2px; min-width: 0; }
+.preset .pname { font-weight: bold; overflow-wrap: anywhere; }
+.preset .psrc { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.preset.on .psrc { color: #cccccc; }
+.tag { border: 1px solid currentColor; padding: 0 4px; margin-left: 8px; font-size: 12px; font-weight: normal; white-space: nowrap; }
+details.fold { border: 1px solid var(--line); margin-bottom: 8px; min-width: 0; }
+details.fold > summary { padding: 13px 12px; min-height: 48px; cursor: pointer; font-weight: bold; background: var(--btn); }
+details.fold[open] > summary { border-bottom: 1px solid var(--line); }
+details.fold .inner { padding: 10px; display: grid; gap: 12px; }
+.group { display: grid; gap: 8px; }
+.group + .group { border-top: 1px solid var(--line); padding-top: 12px; }
+.group > h3 { font-size: 16px; margin: 0; }
+.chk.wide { grid-column: 1 / -1; }
+.group > .grid2 { align-items: end; }
+.f { display: grid; gap: 2px; min-width: 0; align-content: end; }
+.f > span { font-size: 14px; overflow-wrap: anywhere; }
+.chk { display: flex; align-items: center; gap: 10px; min-height: 48px; font-size: 16px; }
+.optnum { display: grid; grid-template-columns: 1fr 96px; gap: 8px; align-items: center; min-width: 0; }
+.optnum.wide { grid-template-columns: 1fr; }
+.four { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 560px) { .four { grid-template-columns: 1fr 1fr; } }
+.seatrow { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+.seatrow .btn { min-width: 88px; }
+.startbar { display: grid; gap: 8px; max-width: 480px; }
+.startbar .btn { min-height: 56px; }
+.unbuilt { max-width: 480px; display: grid; gap: 8px; }
+.unbuilt h1 { font-size: 18px; margin: 0; }
+
+/* Dialogs (in-page questions): what they need beyond the card and backdrop above. */
+.dialog { z-index: 10; }
+.dialog .card { grid-template-columns: minmax(0, 1fr); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow-y: auto; }
+.stack { display: grid; gap: 6px; }
+.stack .btn { width: 100%; text-align: left; min-height: 48px; }
+.dtext { margin: 0; overflow-wrap: anywhere; }
+
+/* Shared controls: a long name wraps rather than pushing a row wider than its card (Review Focus 3). */
+.splitset { display: grid; gap: 2px; min-width: 0; }
+.splitset legend { max-width: 100%; overflow-wrap: anywhere; }
+.chk span { min-width: 0; overflow-wrap: anywhere; }
+
+/* The scoring screen (spec 6.3): the plain look above, plus what this screen adds. */
+.score-layout { display: grid; gap: 12px; }
+.score-layout > .main { min-width: 0; }
+.side { display: none; }
+@media (min-width: 900px) {
+  .score-layout { grid-template-columns: minmax(0, 1fr) 290px; align-items: start; }
+  .side { display: grid; gap: 16px; align-content: start; }
+}
+@media (max-width: 899px) { .seat .key { display: none; } .part .kh { display: none; } }
+.statusline { height: 38px; margin: 0 0 6px; font-size: 14px; line-height: 1.35; color: var(--muted); overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.statusline.err { color: var(--bad); }
+.picker { margin-bottom: 8px; min-height: 48px; display: flex; }
+.picker .chips { flex: 1; }
+.picker .chip { flex: 1 1 0; }
+.chip:disabled { color: var(--offfg); background: var(--off); border-color: #cccccc; cursor: default; }
+.chip.on:disabled { background: #777777; border-color: #777777; color: #ffffff; }
+.picker label { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: center; font-size: 16px; flex: 1; }
+.picker select { min-height: 48px; }
+.tname .tn { overflow: hidden; text-overflow: ellipsis; display: block; }
+.bar .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 20px; }
+.bar .row > .btn { overflow: hidden; min-width: 0; }
+.btn.two { display: grid; align-content: center; justify-items: center; padding: 2px 6px; line-height: 1.15; }
+.btn .sub { display: block; max-width: 100%; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.part { grid-template-columns: 64px 1fr 1fr; }
+.part.bounce { grid-template-columns: 56px 1fr 1fr 52px 52px; }
+.part.head { font-size: 13px; color: var(--muted); }
+.part.head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.part .btn { padding: 0 4px; }
+.part .lab small, .kh { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.bonushead { margin: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.banners { display: grid; gap: 8px; margin-top: 10px; }
+.banner { border: 1px solid var(--line); padding: 8px 10px; display: grid; gap: 6px; min-width: 0; }
+.banner p { margin: 0; overflow-wrap: anywhere; }
+.banner.warn { border-color: var(--bad); }
+.copyline { display: grid; grid-template-columns: 1fr auto; gap: 6px; min-width: 0; }
+.legend { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; margin: 0; }
+.legend dt { font-weight: bold; white-space: nowrap; }
+.legend dd { margin: 0; color: var(--muted); }
+.recent { display: grid; gap: 4px; }
+.rc { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; text-align: left; align-items: center; padding: 4px 8px; }
+.rc .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc .run { font-variant-numeric: tabular-nums; color: var(--muted); }
+.rc .flag { grid-column: 1 / -1; color: var(--bad); font-size: 12px; }
+
+/* Update notice (spec 3.1): shown above Home, Past matches, Setup and the scoresheet when a new version is waiting;
+   never above the scoring screen (it would move the buttons: R36, there it is one line in the menu) or the room
+   board. Plain black border, not the red of a warning: nothing is wrong. */
+.update { border: 1px solid var(--fg); padding: 8px; margin-top: 8px; display: grid; gap: 6px; overflow-wrap: anywhere; }
+.updateline { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.updateline span { overflow-wrap: anywhere; }
+
+/* Room board (spec 6.5): black on white, very large tabular numerals, no colour. The score is sized from the
+   screen so that four characters (a minus sign and three digits) fit in half the width on a phone and a
+   projector alike; a team name takes two lines at most (a box of two lines plus its 3 px rule, which border-box
+   counts in the height), so nothing under it moves. */
+#app[data-screen="board"] { max-width: none; padding-block: 0; }
+.board [hidden] { display: none !important; }
+.board { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; gap: 8px; padding-block: 12px; }
+.board .sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.board-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.unofficial { border: 1px solid var(--line); color: var(--muted); padding: 0 6px; font-size: 13px; }
+.board-q { font-size: clamp(22px, 5vw, 64px); font-weight: bold; text-align: right; overflow-wrap: anywhere; }
+.board-main { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.board-phase { font-size: clamp(18px, 3.4vw, 44px); min-height: 1.3em; overflow-wrap: anywhere; }
+.board-teams { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-content: center; align-items: center; }
+.board-team { min-width: 0; display: grid; gap: 8px; text-align: center; }
+.board-name { font-size: clamp(20px, 4.2vw, 64px); font-weight: bold; line-height: 1.15; height: calc(2.3em + 3px); border-bottom: 3px solid var(--fg); overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.board-score { font-size: min(17vw, 34vh); font-weight: bold; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.board-last { font-size: clamp(18px, 3vw, 40px); min-height: 1.35em; overflow-wrap: anywhere; }
+.board-wait { flex: 1; display: grid; align-content: center; gap: 8px; text-align: center; }
+.board-waiting { font-size: clamp(24px, 5vw, 64px); font-weight: bold; margin: 0; }
+.board-acts { display: flex; justify-content: flex-end; gap: 8px; }
+.board-acts .btn { min-width: 120px; }
+
+/* The scoresheet is wide, so on a big screen it may use more than the usual column. */
+#app[data-screen="sheet"] { max-width: 1700px; }
+
+/* Print (spec 8): the scoresheet screen only. A4 landscape, everything but the sheet hidden, a row never
+   split across pages, the column headings repeated on each page, and the stats on a page of their own.
+   Plain black on white, like the saved scoresheet file (files.js SHEET_CSS), which these rules match. */
+@page { size: A4 landscape; margin: 10mm; }
+@media print {
+  html, body { background: #fff; color: #000; }
+  #status, .noprint, .dialog { display: none !important; }
+  .shell, #app { max-width: none; margin: 0; padding: 0; }
+  .sheetview .sheet { display: block; font: 10pt/1.3 Arial, Helvetica, sans-serif; }
+  .sheetview .sheet .sheet-title { font-size: 15pt; margin: 0 0 1mm; }
+  .sheetview .sheet h2 { font-size: 11pt; margin: 6mm 0 1mm; }
+  .sheetview .sheet p { margin: 1mm 0; font-size: 8.5pt; color: #000; }
+  .sheetview .sheet .wide { overflow: visible; }
+  .sheetview .sheet table { width: 100%; margin: 2mm 0; font-size: 8.5pt; }
+  .sheetview .sheet th, .sheetview .sheet td { padding: 0.8mm 1.5mm; border: 1px solid #000; font-size: 8.5pt; white-space: normal; vertical-align: top; text-align: left; background: none; color: #000; }
+  .sheetview .sheet th { background: #e6e6e6; }
+  .sheetview .sheet .num { text-align: right; white-space: nowrap; }
+  .sheetview .sheet td.seat, .sheetview .sheet th.seat { text-align: center; white-space: nowrap; min-width: 0; }
+  .sheetview .sheet th.seat { max-width: 20mm; white-space: normal; background: #e6e6e6; }
+  .sheetview .sheet td.set { font-size: 7.5pt; min-width: 0; }
+  .sheetview .sheet td.notes { min-width: 0; }
+  .sheetview .sheet tr { break-inside: avoid; page-break-inside: avoid; }
+  .sheetview .sheet thead { display: table-header-group; }
+  .sheetview .sheet tr.after-end td { color: #444; font-style: italic; }
+  .sheetview .sheet tr.marker td { background: #e6e6e6; font-weight: bold; }
+  .sheetview .sheet .cycles tr.cycle td:first-child, .sheetview .sheet .cycles thead th:first-child { position: static; }
+  .sheetview .sheet .rowbtn { border: 0; background: none; min-width: 0; min-height: 0; padding: 0; font: inherit; }
+  .sheetview .sheet .stats { break-before: page; page-break-before: always; }
+}
+</style>
+</head>
+<body>
+<div id="status" class="shell" role="status" aria-live="polite"></div>
+<main id="app" class="shell"></main>
+<noscript><p class="shell">The EUQS Scorer needs JavaScript. Turn it on for this site and reload.</p></noscript>
+<script type="module" src="app.js"></script>
+</body>
+</html>

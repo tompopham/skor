@@ -1,0 +1,341 @@
+// The Setup screen (spec 6.2): pick a format, check or edit its rules, name the teams and players,
+// then Start. Everything typed lives in a draft kept in state.ui.setup, so changing the format
+// never loses a name, and leaving for Home and coming back finds the form as it was.
+
+import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset } from './presets.js';
+import { newMatch } from './engine.js';
+import { loadRoster, saveRoster } from './storage.js';
+import { h, newId } from './dom.js';
+
+// ---- Small helpers -------------------------------------------------------------------------
+
+const getAt = (object, path) => path.split('.').reduce((o, key) => o?.[key], object);
+function setAt(object, path, value) {
+  const keys = path.split('.');
+  const last = keys.pop();
+  keys.reduce((o, key) => o[key], object)[last] = value;
+}
+
+const SIDE = ['A', 'B'];
+const DETAIL_FIELDS = [
+  ['competition', 'Competition'], ['venue', 'Venue'], ['round', 'Round'], ['reader', 'Reader'], ['scorer', 'Scorer'],
+];
+
+function freshDraft() {
+  return {
+    presetId: DEFAULT_PRESET_ID,
+    rules: rulesFromPreset(DEFAULT_PRESET_ID),
+    teams: [0, 1].map(() => ({ name: '', seats: ['', '', '', ''], captain: null })),
+    details: { competition: '', venue: '', round: '', reader: '', scorer: '' },
+    open: { rules: false, details: false },
+  };
+}
+
+// ---- Near-duplicate names (research 9, recommendation 19) -----------------------------------
+
+// The number of single-letter changes (add, drop, swap) between two words.
+export function editDistance(a, b) {
+  const x = Array.from(a);
+  const y = Array.from(b);
+  let previous = Array.from({ length: y.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= x.length; i += 1) {
+    const row = [i];
+    for (let j = 1; j <= y.length; j += 1) {
+      row[j] = Math.min(previous[j] + 1, row[j - 1] + 1, previous[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1));
+    }
+    previous = row;
+  }
+  return previous[y.length];
+}
+
+// The pairs of seats on one team whose names are nearly the same: both over 3 letters, and no more
+// than 2 changes apart ignoring capitals. Returns [[seatA, seatB], ...], seats counted from 0.
+export function nearDuplicateSeats(seats) {
+  const names = seats.map(name => name.trim().toLowerCase().normalize('NFC'));
+  const pairs = [];
+  for (let i = 0; i < names.length; i += 1) {
+    for (let j = i + 1; j < names.length; j += 1) {
+      const long = Array.from(names[i]).length > 3 && Array.from(names[j]).length > 3;
+      if (long && editDistance(names[i], names[j]) <= 2) pairs.push([i, j]);
+    }
+  }
+  return pairs;
+}
+
+// ---- Rule inputs ---------------------------------------------------------------------------
+
+// A whole-number input. `read()` gives the number to show, `write(n)` takes each valid number as it
+// is typed. With `neg`, a positive number typed is kept as its negative: a neg is always a loss, and
+// a phone's number pad has no minus sign to hand.
+function numberInput({ read, write, min = 0, max = 1000, neg = false, label }) {
+  const input = h('input', { type: 'number', step: '1', min: neg ? -max : min, max: neg ? 0 : max, 'aria-label': label });
+  input.value = read();
+  input.addEventListener('input', () => {
+    const value = input.valueAsNumber;
+    if (!Number.isInteger(value)) return;
+    const kept = neg && value > 0 ? -value : value;
+    if (kept >= (neg ? -max : min) && kept <= (neg ? 0 : max)) write(kept);
+  });
+  // Leaving the box shows what is actually kept, so an empty or refused entry cannot mislead.
+  input.addEventListener('change', () => { input.value = read(); });
+  return input;
+}
+
+const pathNumber = (rules, path, options = {}) => numberInput({
+  read: () => getAt(rules, path),
+  write: value => setAt(rules, path, value),
+  ...options,
+});
+
+function numberField(rules, text, path, options = {}) {
+  return h('label', { class: 'f' }, h('span', {}, text), pathNumber(rules, path, { ...options, label: text }));
+}
+
+// A tick box on a row of its own across the grid.
+function checkField(rules, text, path, onChange) {
+  const box = h('input', { type: 'checkbox' });
+  box.checked = Boolean(getAt(rules, path));
+  box.addEventListener('change', () => { setAt(rules, path, box.checked); onChange?.(box.checked); });
+  return h('label', { class: 'chk wide' }, box, h('span', {}, text));
+}
+
+function selectField(rules, text, path, options) {
+  const select = h('select', {}, options.map(([value, name]) => h('option', { value }, name)));
+  select.value = getAt(rules, path);
+  select.addEventListener('change', () => setAt(rules, path, select.value));
+  return h('label', { class: 'f' }, h('span', {}, text), select);
+}
+
+// A value that can be switched off (stored as null): a tick box and a number beside it.
+function optionalNumber(rules, text, path, fallback, options = {}) {
+  let memo = getAt(rules, path) ?? fallback;
+  const box = h('input', { type: 'checkbox' });
+  box.checked = getAt(rules, path) !== null;
+  const number = numberInput({
+    read: () => memo,
+    write: value => { memo = value; if (box.checked) setAt(rules, path, value); },
+    label: `${text}: value`,
+    ...options,
+  });
+  number.disabled = !box.checked;
+  box.addEventListener('change', () => {
+    number.disabled = !box.checked;
+    setAt(rules, path, box.checked ? memo : null);
+  });
+  return h('div', { class: 'optnum' }, h('label', { class: 'chk' }, box, h('span', {}, text)), number);
+}
+
+// Bounce-backs: off, the same value as a part, or a fixed value.
+function bounceField(rules) {
+  let memo = typeof rules.bonus.bounce === 'number' ? rules.bonus.bounce : 5;
+  const mode = rules.bonus.bounce === null ? 'off' : rules.bonus.bounce === 'same' ? 'same' : 'fixed';
+  const select = h('select', {}, [['off', 'Off'], ['same', 'Same value as a part'], ['fixed', 'A fixed value']]
+    .map(([value, name]) => h('option', { value }, name)));
+  select.value = mode;
+  const number = numberInput({
+    read: () => memo,
+    write: value => { memo = value; if (select.value === 'fixed') rules.bonus.bounce = value; },
+    min: 1,
+    label: 'Bounce-back value',
+  });
+  number.disabled = mode !== 'fixed';
+  select.addEventListener('change', () => {
+    number.disabled = select.value !== 'fixed';
+    rules.bonus.bounce = select.value === 'off' ? null : select.value === 'same' ? 'same' : memo;
+  });
+  return h('div', { class: 'optnum' }, h('label', { class: 'f' }, h('span', {}, 'Bounce-backs'), select), number);
+}
+
+const group = (title, ...fields) => h('section', { class: 'group' }, h('h3', {}, title), h('div', { class: 'grid2' }, fields));
+
+// Every value of the rules as an input (spec 5, "the values a preset holds"), plus the trivia
+// values for Consensus and GradWrite (spec 5.1). Edits go straight into `rules`.
+export function rulesPanel(rules) {
+  const panels = [];
+
+  const musicNeg = pathNumber(rules, 'starterTypes.musicNeg', { neg: true, label: 'Music starter neg' });
+  const pictureNeg = pathNumber(rules, 'starterTypes.pictureNeg', { neg: true, label: 'Picture starter neg' });
+  const typesOff = () => { musicNeg.disabled = !rules.starterTypes.on; pictureNeg.disabled = !rules.starterTypes.on; };
+  typesOff();
+  panels.push(group('Starters',
+    numberField(rules, 'Starter value', 'tossup.ten', { min: 1, max: 100 }),
+    optionalNumber(rules, 'Powers', 'tossup.power', 15, { min: 1, max: 100 }),
+    numberField(rules, 'Neg: first team, wrong interruption', 'tossup.neg', { neg: true, max: 100 }),
+    numberField(rules, 'Neg: second team, wrong interruption', 'tossup.secondNeg', { neg: true, max: 100 }),
+    checkField(rules, 'Picture and music starters', 'starterTypes.on', typesOff),
+    h('label', { class: 'f' }, h('span', {}, 'Music starter neg'), musicNeg),
+    h('label', { class: 'f' }, h('span', {}, 'Picture starter neg'), pictureNeg)));
+
+  if (!rules.trivia) {
+    panels.push(group('Bonuses',
+      numberField(rules, 'Parts in a bonus', 'bonus.parts', { min: 1, max: 6 }),
+      numberField(rules, 'Points a part', 'bonus.partValue', { min: 1, max: 100 }),
+      checkField(rules, 'Pass rest allowed', 'bonus.passRest'),
+      bounceField(rules),
+      numberField(rules, 'Sweep reward (all parts got)', 'bonus.reward', { max: 100 }),
+      selectField(rules, 'Bonus numbering', 'bonus.numbering', [['nextUnused', 'Next unused'], ['paired', 'Paired with the starter']]),
+      checkField(rules, 'Held bonus sets for dead picture and music starters', 'bonus.heldSets')));
+  }
+
+  panels.push(group('Length of the match',
+    optionalNumber(rules, 'Fixed length', 'regulation.length', 20, { min: 1 }),
+    selectField(rules, 'Length counts', 'regulation.unit', [['cycles', 'Starters (cycles)'], ['bonusRounds', 'Bonus rounds']]),
+    optionalNumber(rules, 'Halftime after', 'regulation.halftimeAfter', 10, { min: 1 }),
+    optionalNumber(rules, 'Lightning round after (bonus rounds)', 'lightningAfter', 25, { min: 1 }),
+    selectField(rules, 'Overtime', 'overtime', [['suddenDeath', 'Sudden death'], ['threeThenSuddenDeath', 'Three starters, then sudden death']]),
+    selectField(rules, 'When time is called', 'atTime', [['finishCycle', 'Finish the cycle'], ['stopNow', 'Stop at once'], ['buzzMayAnswer', 'A buzz already in may answer']]),
+    checkField(rules, 'Mark overtime results (ET)', 'etLabel')));
+
+  if (rules.trivia) {
+    const jackpot = h('div', { class: 'four' }, [0, 1, 2, 3].map(clue =>
+      h('label', { class: 'f' }, h('span', {}, `Jackpot clue ${clue + 1}`),
+        pathNumber(rules, `trivia.jackpot.${clue}`, { max: 1000, label: `Jackpot clue ${clue + 1}` }))));
+    panels.push(h('section', { class: 'group' }, h('h3', {}, 'Trivia formats'), jackpot,
+      h('div', { class: 'grid2' },
+        optionalNumber(rules, 'Streak (points an answer)', 'trivia.streak', 5, { min: 1, max: 100 }),
+        selectField(rules, 'A short team under Jailbreak', 'trivia.shortJail', [['brick', 'Brick'], ['noAdvantage', 'No Advantage']]),
+        numberField(rules, 'Quarters', 'trivia.quarters', { min: 1, max: 8 })),
+      h('p', { class: 'hint' }, 'Brick: a short team never breaks jail. No Advantage: it breaks jail only as often as its opponents.')));
+  }
+
+  return h('div', { class: 'inner' }, panels);
+}
+
+// ---- The screen ----------------------------------------------------------------------------
+
+function presetList(draft, onPick) {
+  const rows = new Map();
+  const list = h('fieldset', { class: 'presets' }, h('legend', {}, 'Format'));
+  for (const preset of PRESETS) {
+    const unverified = preset.verified === false || /unverified/i.test(preset.source);
+    const input = h('input', { type: 'radio', name: 'preset', value: preset.presetId });
+    input.checked = preset.presetId === draft.presetId;
+    input.addEventListener('change', () => { if (input.checked) onPick(preset.presetId); });
+    const row = h('label', { class: input.checked ? 'preset on' : 'preset' }, input,
+      h('span', { class: 'pbody' },
+        h('span', { class: 'pname' }, preset.name, unverified ? h('span', { class: 'tag' }, 'Unverified') : null),
+        h('span', { class: 'psrc' }, preset.source)));
+    rows.set(preset.presetId, row);
+    list.append(row);
+  }
+  return { list, mark: id => rows.forEach((row, key) => row.classList.toggle('on', key === id)) };
+}
+
+function teamCard(draft, t, rosterId) {
+  const team = draft.teams[t];
+  const warning = h('p', { class: 'msg' });
+  const showWarning = () => {
+    warning.replaceChildren(...nearDuplicateSeats(team.seats).map(([i, j]) =>
+      h('span', {}, `Seats ${i + 1} and ${j + 1} are nearly the same name ("${team.seats[i].trim()}" and "${team.seats[j].trim()}"). Check they are two different players.`, h('br'))));
+  };
+
+  const name = h('input', {
+    id: `team${t}-name`, maxlength: 60, placeholder: `Team ${SIDE[t]}`, autocomplete: 'off', autocapitalize: 'words', spellcheck: 'false',
+    'aria-label': `${t === 0 ? 'Left' : 'Right'} team name`,
+  });
+  name.value = team.name;
+  name.addEventListener('input', () => { team.name = name.value; });
+
+  const captains = [];
+  const markCaptain = () => captains.forEach((button, seat) => button.setAttribute('aria-pressed', String(team.captain === seat)));
+  const seatRows = [0, 1, 2, 3].map(seat => {
+    const input = h('input', {
+      id: `team${t}-seat${seat}`, list: rosterId, maxlength: 40, autocomplete: 'off', autocapitalize: 'words', autocorrect: 'off', spellcheck: 'false',
+      placeholder: seat === 3 ? 'Leave empty if playing three' : 'Name',
+      'aria-label': `${t === 0 ? 'Left' : 'Right'} team, seat ${seat + 1}`,
+    });
+    input.value = team.seats[seat];
+    input.addEventListener('input', () => { team.seats[seat] = input.value; showWarning(); });
+    const captain = h('button', { type: 'button', class: 'btn small', 'aria-pressed': 'false', 'aria-label': `${t === 0 ? 'Left' : 'Right'} team, seat ${seat + 1} is the captain` }, 'Captain');
+    captain.addEventListener('click', () => { team.captain = team.captain === seat ? null : seat; markCaptain(); });
+    captains.push(captain);
+    return h('div', { class: 'seatrow' }, h('label', { class: 'f' }, h('span', {}, `Seat ${seat + 1}`), input), captain);
+  });
+  markCaptain();
+  showWarning();
+
+  return h('div', { class: 'card' }, h('h2', {}, t === 0 ? 'Left team' : 'Right team'),
+    h('label', { class: 'f' }, h('span', {}, 'Team name'), name), seatRows, warning);
+}
+
+function foldedDetails(draft) {
+  const details = h('details', { class: 'fold' }, h('summary', {}, 'Match details'),
+    h('div', { class: 'inner' }, h('div', { class: 'grid2' }, DETAIL_FIELDS.map(([key, text]) => {
+      const input = h('input', { maxlength: 80, autocomplete: 'off' });
+      input.value = draft.details[key];
+      input.addEventListener('input', () => { draft.details[key] = input.value; });
+      return h('label', { class: 'f' }, h('span', {}, text), input);
+    }))));
+  details.open = draft.open.details;
+  details.addEventListener('toggle', () => { draft.open.details = details.open; });
+  return details;
+}
+
+// What Start makes of the draft: blank team names become Team A and Team B, and a team with no
+// names typed gets seats A1 to A4 (B1 to B4), as the bare-bones page did.
+function teamsFromDraft(draft) {
+  return draft.teams.map((team, t) => {
+    const seats = team.seats.map(name => name.trim());
+    const typed = seats.some(Boolean);
+    return {
+      name: team.name.trim() || `Team ${SIDE[t]}`,
+      seats: typed ? seats : [1, 2, 3, 4].map(n => `${SIDE[t]}${n}`),
+      captain: typed && team.captain !== null && seats[team.captain] ? team.captain : null,
+    };
+  });
+}
+
+export function renderSetup(root, state, api) {
+  if (!state.ui.setup) api.setUi({ setup: freshDraft() }, false);
+  const draft = state.ui.setup;
+
+  const rosterId = 'roster-names';
+  const roster = h('datalist', { id: rosterId }, loadRoster().map(name => h('option', { value: name })));
+
+  const rulesHost = h('div', {}, rulesPanel(draft.rules));
+  const rulesFold = h('details', { class: 'fold' }, h('summary', {}, 'Rules'), rulesHost);
+  rulesFold.open = draft.open.rules;
+  rulesFold.addEventListener('toggle', () => { draft.open.rules = rulesFold.open; });
+
+  // Picking another format replaces the rules, and nothing else: names and details stay.
+  const presets = presetList(draft, id => {
+    draft.presetId = id;
+    draft.rules = rulesFromPreset(id);
+    presets.mark(id);
+    rulesHost.replaceChildren(rulesPanel(draft.rules));
+  });
+
+  // Start: the typed names go to the roster, the draft becomes a match, and the page takes over.
+  function startFromDraft() {
+    const teams = teamsFromDraft(draft);
+    const typed = draft.teams.flatMap(team => team.seats.map(name => name.trim()).filter(Boolean));
+    saveRoster([...typed, ...loadRoster()]);
+    const match = newMatch({
+      rules: draft.rules,
+      teams,
+      details: Object.fromEntries(Object.entries(draft.details).map(([key, value]) => [key, value.trim()])),
+      id: newId(),
+      now: Date.now(),
+    });
+    api.setUi({ setup: null }, false);
+    api.startMatch(match);
+  }
+
+  const start = h('button', { type: 'button', class: 'btn primary', id: 'start-match', onclick: startFromDraft }, 'Start match');
+  const form = h('form', { novalidate: true, autocomplete: 'off' },
+    h('div', { class: 'card' }, presets.list),
+    rulesFold,
+    h('div', { class: 'grid2' }, teamCard(draft, 0, rosterId), teamCard(draft, 1, rosterId)),
+    foldedDetails(draft),
+    h('div', { class: 'startbar' }, start,
+      h('p', { class: 'hint' }, 'Names are saved on this device and offered next time. A team with no names typed gets seats A1 to A4 (B1 to B4).')));
+
+  // Only the Start button starts a match. The form never submits, so Enter or a phone keyboard's
+  // Go key in a name or a rule box does nothing, and a half-typed form cannot start by accident.
+  form.addEventListener('submit', event => event.preventDefault());
+
+  const back = h('button', { type: 'button', class: 'btn small', onclick: () => api.go('home') }, 'Home');
+  root.append(
+    h('div', { class: 'top' }, h('h1', { tabindex: '-1' }, 'New match'), h('div', { class: 'acts' }, back)),
+    form, roster);
+}
