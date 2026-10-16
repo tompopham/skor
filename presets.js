@@ -10,6 +10,14 @@ export const DEFAULT_PRESET_ID = 'ukqb';
 
 const NO_STARTER_TYPES = { on: false, musicNeg: 0, pictureNeg: 0 };
 
+// The clock group (v2 3.1): `countdown` is null or { length in seconds, per: 'half' | 'game' }, and
+// `timeoutsPerTeam` a number or null for no limit. `source` is the rulebook clause behind the limit,
+// for the page's question when a team asks for another timeout; empty where there is no limit. ACF C.8
+// (one 30 s timeout a team), NAQT F.2 and F.9 (11:00 a half college, 10:00 high school) and PACE C.8
+// (one timeout of up to 30 s, with no game clock under C.2) are from the rulebooks. University
+// Challenge's 26:00 game is from broadcasts (the gong at about 26 minutes), unverified for the trials.
+// Neither Consensus nor GradWrite has a game clock or a timeout limit (checked 16/10/2026).
+
 export const PRESETS = [
   {
     presetId: 'ukqb',
@@ -25,6 +33,7 @@ export const PRESETS = [
     atTime: 'finishCycle',
     etLabel: false,
     trivia: null,
+    clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: 1, source: 'ACF C.8' },
   },
   {
     presetId: 'acf',
@@ -40,6 +49,7 @@ export const PRESETS = [
     atTime: 'finishCycle',
     etLabel: false,
     trivia: null,
+    clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: 1, source: 'ACF C.8' },
   },
   {
     presetId: 'naqt-college',
@@ -55,6 +65,7 @@ export const PRESETS = [
     atTime: 'finishCycle',
     etLabel: false,
     trivia: null,
+    clock: { countdown: { length: 660, per: 'half' }, timeoutSeconds: 30, timeoutsPerTeam: 1, source: 'NAQT F.9' },
   },
   {
     // The spec's Source cell for this row reads "As above"; it points at the NAQT college row.
@@ -71,6 +82,7 @@ export const PRESETS = [
     atTime: 'finishCycle',
     etLabel: false,
     trivia: null,
+    clock: { countdown: { length: 600, per: 'half' }, timeoutSeconds: 30, timeoutsPerTeam: 1, source: 'NAQT F.9' },
   },
   {
     presetId: 'pace',
@@ -86,6 +98,7 @@ export const PRESETS = [
     atTime: 'finishCycle',
     etLabel: false,
     trivia: null,
+    clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: 1, source: 'PACE C.8' },
   },
   {
     presetId: 'uc',
@@ -101,6 +114,7 @@ export const PRESETS = [
     atTime: 'stopNow',
     etLabel: false,
     trivia: null,
+    clock: { countdown: { length: 1560, per: 'game' }, timeoutSeconds: 30, timeoutsPerTeam: null, source: '' },
   },
   {
     presetId: 'consensus',
@@ -116,6 +130,7 @@ export const PRESETS = [
     atTime: 'finishCycle',
     etLabel: false,
     trivia: { jackpot: [40, 30, 20, 10], streak: 5, shortJail: 'brick', quarters: 4 },
+    clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: null, source: '' },
   },
   {
     presetId: 'gradwrite',
@@ -131,6 +146,7 @@ export const PRESETS = [
     atTime: 'finishCycle',
     etLabel: false,
     trivia: { jackpot: [30, 25, 15, 10], streak: null, shortJail: 'noAdvantage', quarters: 4 },
+    clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: null, source: '' },
   },
 ];
 

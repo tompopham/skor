@@ -10,7 +10,7 @@ import {
 import { offerFile, resultLine, fileName } from './files.js';
 import { h, newId } from './dom.js';
 import { renderSetup } from './view-setup.js';
-import { renderScore } from './view-score.js';
+import { renderScore, stopClockTicker } from './view-score.js';
 import { renderSheet, renderPast } from './view-sheet.js';
 import { renderBoard, stopBoard, CHANNEL_NAME } from './view-board.js';
 import { VERSION } from './version.js';
@@ -38,8 +38,14 @@ const VIEWS = { home: renderHome, setup: renderSetup, score: renderScore, sheet:
 
 const api = {
   go, back, dispatch, dispatchAll, startMatch, setUi, closeSub, ask, undo, redo, setDisplay, editCycle,
-  keepAwake, wakeStatus, offerBackup, viewMatch, resumeSaved, deleteSaved, updateReady, applyUpdate,
+  keepAwake, wakeStatus, offerBackup, viewMatch, resumeSaved, deleteSaved, updateReady, applyUpdate, now,
 };
+
+// The time every action is stamped with, and every clock on screen is worked out from: milliseconds since
+// 1 January 1970 (v2 1.8). One function, so a page check can hold the page's time still or move it by minutes at once.
+function now() {
+  return Date.now();
+}
 
 // Moves to a screen, as a history entry (see the back gesture below). `ui` is what the screen starts
 // with (the cycle editor opens with its cycle).
@@ -52,6 +58,7 @@ function go(screen, ui = {}) {
 // Draws a screen, without touching the history.
 function show(screen, ui = {}) {
   if (screen !== 'board') stopBoard();
+  if (screen !== 'score') stopClockTicker();
   state.screen = screen;
   state.enteredAt = performance.now();
   state.ui = { ...Object.fromEntries(KEEP_UI.filter(key => state.ui[key]).map(key => [key, state.ui[key]])), ...ui };
@@ -260,7 +267,7 @@ function dispatchAll(actions, uiPatch = {}) {
   if (state.foreign) return { ok: false, error: new Error('This match changed in another tab. Reload it before scoring.') };
   let next = state.match;
   try {
-    for (const action of actions) next = applyAction(next, action, Date.now());
+    for (const action of actions) next = applyAction(next, action, now());
   } catch (error) {
     if (error instanceof RefusedError) return { ok: false, error };
     throw error;
@@ -283,7 +290,7 @@ function stepHistory(step) {
   const restored = step();
   if (!restored) return false;
   Object.assign(state.ui, { msg: '', selected: null, streakN: 0 });
-  commit({ ...restored, display: state.match.display, rev: state.match.rev + 1, changedAt: Date.now() });
+  commit({ ...restored, display: state.match.display, rev: state.match.rev + 1, changedAt: now() });
   return true;
 }
 function undo() {
@@ -297,7 +304,7 @@ function redo() {
 // as a change but are not a version to undo.
 function setDisplay(patch) {
   if (!state.match || state.foreign) return;
-  commit({ ...state.match, display: { ...state.match.display, ...patch }, rev: state.match.rev + 1, changedAt: Date.now() });
+  commit({ ...state.match, display: { ...state.match.display, ...patch }, rev: state.match.rev + 1, changedAt: now() });
 }
 
 // Opens the cycle editor (spec 6.4) on one cycle. The scoresheet passes the screen to come back to
@@ -593,7 +600,9 @@ function ask({ title, body = [], buttons = [] }) {
     openAsks.push(finish);
     raiseLayer();
     document.body.append(dialog);
-    (dialog.querySelector('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? choices.find(button => button.dataset.value === 'cancel') ?? choices[0])?.focus();
+    // preventScroll: the dialog opens at its top. A long one (the menu) would otherwise scroll down to its Close button,
+    // hiding the items at the top, which are the ones wanted mid-match (Start clock, Timeout).
+    (dialog.querySelector('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? choices.find(button => button.dataset.value === 'cancel') ?? choices[0])?.focus({ preventScroll: true });
   });
 }
 

@@ -2,6 +2,10 @@
 // derive(), which works out scores and the open state from the record alone. Nothing derived is
 // ever stored (spec section 4: the record is the only truth), so editing any cycle stays safe.
 // No screen code lives here, so every rule can be tested in Node.
+// Time (v2 3.1) is recorded here and worked out in clock.js: this file only stamps the cycles, keeps the
+// clock's start and stop list and places the timeout markers. engine.js imports clock.js, never the reverse.
+
+import { clockRunning, defaultClockRules } from './clock.js';
 
 const RESULTS = ['power', 'ten', 'neg', 'wrong'];
 const CORRECT = ['power', 'ten'];
@@ -68,15 +72,19 @@ function copyTeam(team = {}) {
   };
 }
 
+// A copy of the rules with every clock rule present (a preset or a record without them gets the defaults).
+const withClockRules = rules => ({ ...structuredClone(rules), clock: { ...defaultClockRules(), ...structuredClone(rules.clock) } });
+
 export function newMatch({ rules, teams, details = {}, display = {}, id, now }) {
   return {
     id, createdAt: now, changedAt: now, rev: 0, nextCycleNo: 1,
-    rules: structuredClone(rules),
+    rules: withClockRules(rules),
     details: { competition: '', venue: '', round: '', reader: '', scorer: '', ...details },
     teams: [copyTeam(teams?.[0]), copyTeam(teams?.[1])],
     display: { leftTeam: 0, seatOrder: 'asc', ...display },
     cycles: [],
     markers: [],
+    clock: [],                                    // v2 3.1: [ { type: 'start' | 'stop', at } ]
   };
 }
 
@@ -86,6 +94,7 @@ const blankCycle = id => ({
   format: 'normal', clue: 0, streak: [], eligible: null,
   buzzes: [], lostTurn: [], dead: false, noBonus: false, bonus: null,
   bonusNumberOverride: null, allowAfterTime: null, note: '',
+  openedAt: null, closedAt: null,                 // v2 3.1: the times of its first entry and of the entry that closed it
 });
 
 // A new cycle id: 'c1', 'c2'..., never reused, even after a delete.
@@ -108,15 +117,17 @@ const bareSet = parts => ({ parts: Array.from({ length: parts }, () => ({ ctrl: 
 // Each handler changes its own copy of the match, or throws a RefusedError. `open` and `phase` are
 // derive()'s open state and phase for the match before the action, and `entry` the open cycle's
 // starting state from cycleEntries() (the next cycle's when none is open); a starter action with
-// no cycle open adds one. A refusal may come after the handler has changed its copy: the copy is
-// then thrown away.
+// no cycle open adds one. `now` is the time of the action (v2 3.1), a sixth argument only the handlers
+// that stamp a time use. A refusal may come after the handler has changed its copy: the copy is then
+// thrown away.
 
 const openCycleOf = (match, open) => match.cycles.find(c => c.id === open.cycleId) ?? null;
 
-// A cycle started by a starter action, in the format carried on from the one before (spec 5.1).
-// An overtime starter never carries a bonus, so it is marked noBonus as it starts (spec 4).
-function startCycle(match, entry, phase) {
+// A cycle started by a starter action, in the format carried on from the one before (spec 5.1), opened
+// at `now` (v2 3.1). An overtime starter never carries a bonus, so it is marked noBonus as it starts (spec 4).
+function startCycle(match, entry, phase, now) {
   const cycle = addCycle(match);
+  cycle.openedAt = now;
   cycle.format = entry.format;
   cycle.eligible = entry.eligible;
   if (phase.overtime) cycle.noBonus = true;
@@ -202,8 +213,8 @@ function checkStreakTurn(match, cycle, { team, seat, answers, wrong }) {
   checkTeamTurn(cycle, team, match.teams[team].name, 'streak');
 }
 
-function buzz(match, { team, seat, result }, open, entry, phase) {
-  const cycle = openCycleOf(match, open) ?? startCycle(match, entry, phase);
+function buzz(match, { team, seat, result }, open, entry, phase, now) {
+  const cycle = openCycleOf(match, open) ?? startCycle(match, entry, phase, now);
   const format = formatOf(cycle, match.rules);
   const entered = { team, seat, result };
   if (format === 'jackpot') entered.clue = cycle.clue;
@@ -221,15 +232,15 @@ function refuseIfAnswered(cycle) {
 }
 
 // Dead also ends a Streak ("Streak over") and a Jackpot nobody answered.
-function dead(match, _action, open, entry, phase) {
+function dead(match, _action, open, entry, phase, now) {
   const cycle = openCycleOf(match, open);
   refuseIfAnswered(cycle);
-  (cycle ?? startCycle(match, entry, phase)).dead = true;
+  (cycle ?? startCycle(match, entry, phase, now)).dead = true;
 }
 
-function lostTurn(match, { team }, open, entry, phase) {
+function lostTurn(match, { team }, open, entry, phase, now) {
   if (!isTeam(team)) throw new RefusedError('bad-action', 'a lost turn needs team 0 or 1');
-  const cycle = openCycleOf(match, open) ?? startCycle(match, entry, phase);
+  const cycle = openCycleOf(match, open) ?? startCycle(match, entry, phase, now);
   refuseIfAnswered(cycle);
   checkTeamTurn(cycle, team, match.teams[team].name, formatOf(cycle, match.rules));
   checkCarried(match, entry, team, null);
@@ -244,9 +255,9 @@ function checkStarterType(match, kind) {
 
 // Sets the open starter's type (UC picture and music). It may be changed until the cycle closes,
 // since derive() reworks the fine from the record.
-function starterType(match, { kind }, open, entry, phase) {
+function starterType(match, { kind }, open, entry, phase, now) {
   checkStarterType(match, kind);
-  (openCycleOf(match, open) ?? startCycle(match, entry, phase)).type = kind;
+  (openCycleOf(match, open) ?? startCycle(match, entry, phase, now)).type = kind;
 }
 
 // ---- Trivia actions (spec 5.1) --------------------------------------------------------------
@@ -262,14 +273,14 @@ function checkFormat(match, format) {
 // Sets the open question's format before anything is entered against it; with no cycle open it
 // starts one in that format. The Jackpot clue goes back to the first; Split seats are kept only
 // for a Split.
-function setFormat(match, { format, eligible }, open, entry, phase) {
+function setFormat(match, { format, eligible }, open, entry, phase, now) {
   checkFormat(match, format);
   const existing = openCycleOf(match, open);
   if (existing && hasEntry(existing)) {
     throw new RefusedError('question-started', 'the format cannot change once anything is entered on the question');
   }
   const seats = format === 'split' ? checkSplitSeats(match, eligible) : null;
-  const cycle = existing ?? startCycle(match, entry, phase);
+  const cycle = existing ?? startCycle(match, entry, phase, now);
   cycle.format = format;
   cycle.clue = 0;
   cycle.eligible = seats;
@@ -449,7 +460,7 @@ function halftime(match, _action, open, _entry, phase) {
 // starter that already has a buzz is not: only the other team is still in, and its buzz closes
 // the starter by the ordinary rules, so marking it would close it at once.
 // Under finishCycle the starter is finished anyway, so allowBuzz changes nothing.
-function timeCalled(match, { allowBuzz = false }, open, entry, phase) {
+function timeCalled(match, { allowBuzz = false }, open, entry, phase, now) {
   if (typeof allowBuzz !== 'boolean') throw new RefusedError('bad-action', 'allowBuzz must be true or false');
   checkNotEnded(phase);
   checkInRegulation(phase);
@@ -467,7 +478,7 @@ function timeCalled(match, { allowBuzz = false }, open, entry, phase) {
     }
   } else if (open.stage === 'starter' && rules.atTime !== 'finishCycle') {
     if (allow) {
-      cycle ??= startCycle(match, entry, phase);
+      cycle ??= startCycle(match, entry, phase, now);
       if (cycle.buzzes.length === 0) cycle.allowAfterTime = true;
       cycle.noBonus = true;
     } else if (cycle && hasEntry(cycle)) {
@@ -489,6 +500,32 @@ function endMatch(match, _action, open, _entry, phase) {
   if (cycle && hasEntry(cycle)) throw new RefusedError('question-open', 'finish the open question first');
   if (cycle) dropOpenCycle(match);
   match.markers.push({ type: 'ended', afterCycleId: match.cycles.at(-1)?.id ?? null });
+}
+
+// ---- Clock actions (v2 3.1) -----------------------------------------------------------------
+// Time is recorded, never counted: the clock is a list of starts and stops in the record, and a timeout
+// is a marker with its time. Neither changes a score. Both are refused once the match has ended.
+
+const pushClock = (match, type, at) => { (match.clock ??= []).push({ type, at }); };
+
+// Start clock and Pause. The first live entry, or the first after a stop, starts the clock by itself
+// (applyAction), so these two are for starting early and for pausing.
+function setClock(match, { run }, _open, _entry, phase, now) {
+  checkNotEnded(phase);
+  if (typeof run !== 'boolean') throw new RefusedError('bad-action', 'the clock needs run true or false');
+  if (run === clockRunning(match)) {
+    throw new RefusedError(run ? 'clock-running' : 'clock-stopped', run ? 'the clock is already running' : 'the clock is not running');
+  }
+  pushClock(match, run ? 'start' : 'stop', now);
+}
+
+// A timeout: a marker after the last question closed, so it moves with that question like the other
+// markers. How many a team may take is the rules' (and the page's question): a second is recorded.
+function callTimeout(match, { team }, open, _entry, phase, now) {
+  checkNotEnded(phase);
+  if (!isTeam(team)) throw new RefusedError('bad-action', 'a timeout needs team 0 or 1');
+  const last = (open.cycleId === null ? match.cycles : match.cycles.slice(0, -1)).at(-1);
+  match.markers.push({ type: 'timeout', team, afterCycleId: last?.id ?? null, at: now });
 }
 
 // ---- Edit actions (spec 6.4: the cycle editor, and changing a rule mid-match) ---------------
@@ -602,24 +639,29 @@ function checkedBonus(match, cycle, given) {
   return set;
 }
 
-// Save in the cycle editor: the cycle is replaced, keeping its id and its place.
+// Save in the cycle editor: the cycle is replaced, keeping its id, its place and its times (v2 3.1): the
+// replacement's own openedAt and closedAt are ignored.
 function replaceCycle(match, { cycleId, cycle }) {
-  match.cycles[cycleIndex(match, cycleId)] = checkedCycle(match, cycleId, cycle);
+  const index = cycleIndex(match, cycleId);
+  const { openedAt = null, closedAt = null } = match.cycles[index];
+  match.cycles[index] = { ...checkedCycle(match, cycleId, cycle), openedAt, closedAt };
 }
 
-// Delete: a marker on the deleted cycle moves to the cycle before, or goes if there is none.
+// Delete: a marker on the deleted cycle moves to the cycle before, or goes if there is none. A timeout
+// is the exception: it was taken, so it stays, now before the first question.
 function deleteCycle(match, { cycleId }) {
   const index = cycleIndex(match, cycleId);
   match.cycles.splice(index, 1);
   const before = match.cycles[index - 1]?.id;
   match.markers = match.markers.flatMap(marker => {
     if (marker.afterCycleId !== cycleId) return [marker];
-    return before === undefined ? [] : [{ ...marker, afterCycleId: before }];
+    if (before !== undefined) return [{ ...marker, afterCycleId: before }];
+    return marker.type === 'timeout' ? [{ ...marker, afterCycleId: null }] : [];
   });
 }
 
-// Insert: a dead cycle with a new id before the one named. Markers stay after their own cycles,
-// so they move with them. The screen then opens the new cycle in the editor.
+// Insert: a dead cycle with a new id before the one named, with no times (v2 3.1). Markers stay after
+// their own cycles, so they move with them. The screen then opens the new cycle in the editor.
 function insertCycle(match, { beforeCycleId }) {
   const index = cycleIndex(match, beforeCycleId);
   const cycle = blankCycle(nextCycleId(match));
@@ -655,8 +697,9 @@ function setRules(match, { rules }) {
 const STARTER_ACTIONS = { buzz, dead, lostTurn, starterType, format: setFormat, nextClue, streak: streakTurn };
 const BONUS_ACTIONS = { part, allGot, noneGot, closeBonus, passRest, bonusTotal, bonusNumber };
 const FLOW_ACTIONS = { halftime, timeCalled, endMatch, endQuarter };
+const CLOCK_ACTIONS = { clock: setClock, timeout: callTimeout };
 const EDIT_ACTIONS = { replaceCycle, deleteCycle, insertCycle, note, setRules };
-const ACTIONS = { ...STARTER_ACTIONS, ...BONUS_ACTIONS, ...FLOW_ACTIONS, ...EDIT_ACTIONS };
+const ACTIONS = { ...STARTER_ACTIONS, ...BONUS_ACTIONS, ...FLOW_ACTIONS, ...CLOCK_ACTIONS, ...EDIT_ACTIONS };
 
 function checkInPlay(type, { open, phase }) {
   const starter = Object.hasOwn(STARTER_ACTIONS, type);
@@ -666,8 +709,24 @@ function checkInPlay(type, { open, phase }) {
   }
 }
 
+// What the clock does around an action (v2 3.1), after the handler has run on the copy `next`; `before`
+// is derive()'s result for the match before it. The cycle the action has just closed takes `now` as its
+// closedAt (a cycle closed again after a throw-out takes the later close). Then the clock stops if it
+// runs and the action has just brought halftime (the halftime cycle closed, or the Halftime action) or
+// ended the match (End match, or a decided overtime). Only the last cycle can close in play.
+function noteTime(next, before, now) {
+  const { derived: after } = analyse(next);
+  const last = after.cycles.at(-1);
+  if (last?.closed && !before.cycles.find(c => c.id === last.id)?.closed) next.cycles.at(-1).closedAt = now;
+  const halftimeNow = after.phase.halftimeAfterCycleId !== null && before.phase.halftimeAfterCycleId === null;
+  const endedNow = after.phase.ended && !before.phase.ended;
+  if ((halftimeNow || endedNow) && clockRunning(next)) pushClock(next, 'stop', now);
+}
+
 // Returns a new match with the action applied, `rev` raised by 1 and `changedAt` set to `now`.
 // The match passed in is never changed. Throws a RefusedError for an entry that cannot stand.
+// A starter or bonus action (a live entry) first starts the clock if it is not running. Edit actions
+// and the clock's own actions never start it, stop it or stamp a time.
 export function applyAction(match, action, now) {
   const type = action?.type;
   const handler = Object.hasOwn(ACTIONS, type) ? ACTIONS[type] : null;
@@ -675,7 +734,10 @@ export function applyAction(match, action, now) {
   const { derived, entry } = analyse(match);
   checkInPlay(type, derived);
   const next = structuredClone(match);
-  handler(next, action, derived.open, entry, derived.phase);
+  const live = Object.hasOwn(STARTER_ACTIONS, type) || Object.hasOwn(BONUS_ACTIONS, type);
+  if (live && !clockRunning(next)) pushClock(next, 'start', now);
+  handler(next, action, derived.open, entry, derived.phase, now);
+  if (!Object.hasOwn(EDIT_ACTIONS, type) && !Object.hasOwn(CLOCK_ACTIONS, type)) noteTime(next, derived, now);
   next.rev = match.rev + 1;
   next.changedAt = now;
   return next;

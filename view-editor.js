@@ -278,11 +278,19 @@ export function renderCycleEditor(root, state, api) {
     const markers = match.markers.filter(m => m.afterCycleId === cycleId);
     const before = index > 0 ? `Q${index}` : null;
     const quarterNumber = marker => match.markers.filter(m => m.type === 'quarter').indexOf(marker) + 1;
-    const words = { ended: 'the end of the match', halftime: 'halftime', timeCalled: 'the time-called mark' };
+    // What a marker is called in the question. A quarter has its number and a timeout its team.
+    const wordsFor = marker => {
+      if (marker.type === 'quarter') return `the end of quarter ${quarterNumber(marker)}`;
+      if (marker.type === 'timeout') return `the timeout for ${teamName(match, marker.team)}`;
+      return { ended: 'the end of the match', halftime: 'halftime', timeCalled: 'the time-called mark' }[marker.type] ?? marker.type;
+    };
     const body = [`Q${number} and everything entered on it will be removed. Later questions move up one and the scores are worked out again.`];
     for (const marker of markers) {
-      const what = marker.type === 'quarter' ? `the end of quarter ${quarterNumber(marker)}` : words[marker.type] ?? marker.type;
-      body.push(before ? `Q${number} carries ${what}. Deleting it moves ${what} back to ${before}.` : `Q${number} carries ${what}. Deleting it removes ${what}, as there is no earlier question to move it to.`);
+      const what = wordsFor(marker);
+      if (before) body.push(`Q${number} carries ${what}. Deleting it moves ${what} back to ${before}.`);
+      // A timeout was taken, so with no earlier question it stays, now before the first one (the engine's deleteCycle).
+      else if (marker.type === 'timeout') body.push(`Q${number} carries ${what}. Deleting it keeps ${what}, now before the first question.`);
+      else body.push(`Q${number} carries ${what}. Deleting it removes ${what}, as there is no earlier question to move it to.`);
     }
     const choice = await api.ask({
       title: `Delete Q${number}?`, body,

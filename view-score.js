@@ -2,12 +2,16 @@
 // the bonus panel, the trivia controls (spec 5.1), the menu, the phase banners and the laptop keys.
 // It hands the screen to view-editor.js for the cycle editor and Edit rules (state.ui.sub). Everything
 // is drawn from derive() of the match; every change goes through api.dispatch, so the engine alone
-// decides what is allowed and this file only shows the refusal.
+// decides what is allowed and this file only shows the refusal. The clock's slot in the top bar, the
+// banner at 0:00 and the timeout box (v2 3.3) are here too: they show what clock.js works out from the
+// record at api.now(), and the one 1 s ticker only repaints their text.
 
 import { derive, applyAction, FORMATS } from './engine.js';
 import { keyToCommand, tapGuard } from './keys.js';
 import { loadSettings, saveSettings } from './storage.js';
 import { resultLine } from './files.js';
+import { clockRunning, elapsed, countdownState, defaultClockRules, timeoutsUsed, timeSummary, formatLength } from './clock.js';
+import { unlockSound, gong, beep } from './sound.js';
 import { h } from './dom.js';
 import {
   fmt, MINUS, teamName, seatName, leftRight, flagText, repeatText, refusalText, STREAK_MAX, triviaFormats, select, check,
@@ -44,6 +48,15 @@ function listen(state, api) {
   if (listening) return;
   listening = true;
   document.addEventListener('keydown', onKey);
+  // Sound needs a tap before the browser lets a page make any (an iPhone most of all): the first touch, click
+  // or key on the scoring screen unlocks it. Capturing, so that a tap which starts the match (on Setup) is not one.
+  for (const type of ['pointerup', 'click', 'keydown']) document.addEventListener(type, unlockOnScoring, true);
+  // A phone that was locked wakes with its timer asleep: read the clock again at once.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tickClock(); });
+}
+
+function unlockOnScoring() {
+  if (live?.state.screen === 'score') unlockSound();
 }
 
 const keysAreOn = () => loadSettings().singleKeys !== false;
@@ -146,10 +159,14 @@ function describe(match, cycle, dc) {
 export function renderScore(root, state, api) {
   listen(state, api);
   const sub = state.ui.sub;
-  if (sub?.kind === 'cycle' && state.match.cycles.some(cycle => cycle.id === sub.cycleId)) return renderCycleEditor(root, state, api);
-  if (sub?.kind === 'rules') return renderRulesEditor(root, state, api);
-  state.ui.sub = null;
-  return renderMain(root, state, api);
+  if (sub?.kind === 'cycle' && state.match.cycles.some(cycle => cycle.id === sub.cycleId)) renderCycleEditor(root, state, api);
+  else if (sub?.kind === 'rules') renderRulesEditor(root, state, api);
+  else {
+    state.ui.sub = null;
+    renderMain(root, state, api);
+  }
+  startClockTicker(state, api);
+  refreshClock(state, api);
 }
 
 function renderMain(root, state, api) {
@@ -197,9 +214,10 @@ function phaseTag({ match, d }) {
 function topBar(c) {
   const { state, api, match } = c;
   const small = (id, text, onclick, disabled = false) => h('button', { type: 'button', class: 'btn small', id, disabled, onclick }, text);
-  return h('div', { class: 'top' },
-    h('div', {}, h('h1', { tabindex: '-1' }, questionLabel(c)),
+  return h('div', { class: 'top scoretop' },
+    h('div', { class: 'toptitle' }, h('h1', { tabindex: '-1' }, questionLabel(c)),
       h('div', { class: 'info' }, [match.rules.name, phaseTag(c)].filter(Boolean).join(' · '))),
+    clockSlot(c),
     h('div', { class: 'acts' },
       small('undo', 'Undo', () => api.undo(), !state.history.canUndo()),
       small('redo', 'Redo', () => api.redo(), !state.history.canRedo()),
@@ -508,7 +526,7 @@ async function endMatchFlow(c) {
   const actions = [];
   let simulated = match;
   const add = action => {
-    simulated = applyAction(simulated, action, Date.now());
+    simulated = applyAction(simulated, action, api.now());
     actions.push(action);
   };
   const body = [`Scores now: ${teamName(match, 0)} ${fmt(d.scores[0])}, ${teamName(match, 1)} ${fmt(d.scores[1])}.`];
@@ -534,6 +552,185 @@ async function endMatchFlow(c) {
   if (choice === 'end') c.act(actions);
 }
 
+// ---- The clock (v2 3.3) ----------------------------------------------------------------------
+// The top bar has a fixed slot for the clock, so no button moves whatever it says. Without a countdown it shows
+// the time since the clock first started ("12:34", "0:00" before). With one it is a button: "Start clock" before
+// the first start, then the time left ("3:21 left"), "Paused" while stopped and "+0:12" once over; a tap starts
+// or pauses the clock. When the match has ended it shows the game's length and stops. Every figure is worked out
+// from the record at api.now() (v2 1.3, 1.8), never by counting ticks, so a locked phone or a reload still
+// reads right. The one 1 s ticker repaints the slot's text and the overlays; it never redraws the screen.
+
+const clockRulesOf = match => ({ ...defaultClockRules(), ...match.rules.clock });
+
+// The time left, counted down to 0:00 (so the last second reads 0:01), and counting on as "+0:12" once over.
+function leftText(leftMs) {
+  if (leftMs > 0) return `${formatLength(Math.ceil(leftMs / 1000) * 1000)} left`;
+  if (leftMs === 0) return '0:00 left';
+  return `+${formatLength(Math.floor(-leftMs / 1000) * 1000)}`;
+}
+
+function slotText(match, d, now) {
+  if (d.phase.ended) return formatLength(timeSummary(match, d).game);
+  const count = countdownState(match, now);
+  if (count === null) return formatLength(Math.max(0, elapsed(match, now) ?? 0));
+  if (!(match.clock ?? []).some(event => event.type === 'start')) return 'Start clock';
+  return count.running ? leftText(count.left) : 'Paused';
+}
+
+function clockSlot(c) {
+  const { match, d, api } = c;
+  const now = api.now();
+  const text = slotText(match, d, now);
+  if (countdownState(match, now) === null || d.phase.ended) return h('div', { class: 'clockslot', id: 'clock-slot', role: 'timer' }, text);
+  return h('button', {
+    type: 'button', class: 'btn clockslot', id: 'clock-slot', title: 'Tap to start or pause the clock',
+    onclick: () => c.act({ type: 'clock', run: !clockRunning(c.state.match) }, {}),
+  }, text);
+}
+
+// What the person has closed or the sound has already marked, for this page load only. A banner is keyed by its
+// match and period, a timeout box by its marker and the marker's time, so each comes back for the next one.
+const timeUi = { closed: new Set(), seen: new Set(), rung: new Set(), gong: new Map() };
+
+// The gong plays once per period, when the time left first reaches 0: a period that is already over when the page
+// first looks at it (a reload) makes no sound, and an undo that puts time back does not make it ring twice.
+function watchGong(match, count) {
+  if (count === null) return;
+  const key = `${match.id}|${count.period}`;
+  const seen = timeUi.gong.get(key);
+  if (count.left > 0) {
+    if (seen === undefined) timeUi.gong.set(key, 'before');
+  } else if (seen !== 'done') {
+    timeUi.gong.set(key, 'done');
+    if (seen === 'before') gong();
+  }
+}
+
+const bannerWords = (match, count) => {
+  if (count.perHalf && count.period === 1) return 'End of the first half: press Halftime';
+  return match.rules.atTime === 'stopNow' ? 'Gong: press Time called' : 'Time: finish the question, then press Time called';
+};
+
+// The banner at 0:00, or null: nothing ends by itself, so it stays until it is closed, or Halftime (the next
+// period begins) or Time called is pressed, and does not come back for that period.
+function bannerBox(match, d, now) {
+  const count = countdownState(match, now);
+  if (count === null || count.left > 0 || d.phase.ended || match.markers.some(m => m.type === 'timeCalled')) return null;
+  const key = `${match.id}|${count.period}`;
+  return timeUi.closed.has(key) ? null : { id: 'time-banner', closeId: 'time-banner-close', key, text: bannerWords(match, count) };
+}
+
+// The latest timeout's box, or null: its time left comes from the marker's own time. It stays at 0:00 until
+// closed if it was seen counting; one that ended before the page looked (a reload) is not brought back.
+function timeoutBox(match, now) {
+  const marker = match.markers.filter(m => m.type === 'timeout' && Number.isFinite(m.at)).sort((a, b) => a.at - b.at).at(-1);
+  if (!marker) return null;
+  const key = `${match.id}|${match.markers.indexOf(marker)}|${marker.at}|${marker.team}`;
+  if (timeUi.closed.has(key)) return null;
+  const length = clockRulesOf(match).timeoutSeconds * 1000;
+  const remaining = Math.min(length, marker.at + length - now);
+  if (remaining > 0) timeUi.seen.add(key);
+  else if (!timeUi.seen.has(key)) return null;
+  else if (!timeUi.rung.has(key)) {
+    timeUi.rung.add(key);
+    beep();
+  }
+  return { id: 'timeout-box', closeId: 'timeout-close', key, name: `Timeout: ${teamName(match, marker.team)}`, left: formatLength(Math.max(0, Math.ceil(remaining / 1000) * 1000)) };
+}
+
+// The boxes sit in one fixed layer at the bottom of the screen, outside the page that is redrawn, so a box is
+// only ever added, repainted or removed: no button moves, and a tap on Close is never lost to a redraw.
+function buildBox(box, state, api) {
+  const close = h('button', {
+    type: 'button', class: 'btn', id: box.closeId,
+    onclick: () => { timeUi.closed.add(box.key); refreshClock(state, api); },
+  }, 'Close');
+  if (box.id === 'time-banner') {
+    return h('div', { class: 'timebox', id: box.id, 'data-key': box.key, role: 'status' }, h('span', { class: 'timetext' }, box.text), close);
+  }
+  return h('div', { class: 'timebox', id: box.id, 'data-key': box.key, role: 'group', 'aria-label': box.name },
+    h('span', { class: 'timetext' }, box.name), h('span', { class: 'timeleft', id: 'timeout-left', role: 'timer' }, box.left), close);
+}
+
+function syncTimeLayer(state, api, wanted) {
+  let layer = document.getElementById('timelayer');
+  if (wanted.length === 0) {
+    layer?.remove();
+    return;
+  }
+  if (!layer) {
+    layer = h('div', { class: 'timelayer', id: 'timelayer' });
+    document.body.append(layer);
+  }
+  for (const el of [...layer.children]) {
+    if (!wanted.some(box => box.id === el.id && box.key === el.dataset.key)) el.remove();
+  }
+  for (const box of wanted) {
+    const el = document.getElementById(box.id);
+    if (!el) layer.append(buildBox(box, state, api));
+    else if (box.left !== undefined) {
+      const left = el.querySelector('.timeleft');
+      if (left.textContent !== box.left) left.textContent = box.left;
+    }
+  }
+  const order = wanted.map(box => box.id);
+  if ([...layer.children].map(el => el.id).join() !== order.join()) for (const id of order) layer.append(document.getElementById(id));
+}
+
+// Reads the clock once: repaints the slot's text, rings the gong if its time has come, and shows or removes the
+// banner and the timeout box (not above the cycle or rules editor, which the boxes would sit over).
+function refreshClock(state, api) {
+  const { match } = state;
+  if (!match || state.screen !== 'score') return;
+  const now = api.now();
+  const d = derive(match);
+  const slot = document.getElementById('clock-slot');
+  if (slot) {
+    const text = slotText(match, d, now);
+    if (slot.textContent !== text) slot.textContent = text;
+  }
+  watchGong(match, countdownState(match, now));
+  syncTimeLayer(state, api, state.ui.sub ? [] : [timeoutBox(match, now), bannerBox(match, d, now)].filter(Boolean));
+}
+
+const ticker = { timer: null, live: null };
+
+function tickClock() {
+  const live = ticker.live;
+  if (!live) return;
+  if (live.state.screen !== 'score' || !live.state.match) stopClockTicker();
+  else refreshClock(live.state, live.api);
+}
+
+function startClockTicker(state, api) {
+  ticker.live = { state, api };
+  if (ticker.timer === null) ticker.timer = setInterval(tickClock, 1000);
+}
+
+// Called by the page when the scoring screen is left: the timer goes, and so do the boxes over the screen.
+export function stopClockTicker() {
+  if (ticker.timer !== null) clearInterval(ticker.timer);
+  ticker.timer = null;
+  ticker.live = null;
+  document.getElementById('timelayer')?.remove();
+}
+
+// "Timeout: <team>" from the menu. A team over the rules' limit is asked first, naming the rule (v2 3.3).
+async function takeTimeout(c, team) {
+  const { match } = c.state;
+  const rules = clockRulesOf(match);
+  if (rules.timeoutsPerTeam !== null && timeoutsUsed(match, team) >= rules.timeoutsPerTeam) {
+    const n = rules.timeoutsPerTeam;
+    const choice = await c.api.ask({
+      title: 'Another timeout?',
+      body: `${teamName(match, team)} has had its ${n} ${n === 1 ? 'timeout' : 'timeouts'}${rules.source ? ` (${rules.source})` : ''}. Record another?`,
+      buttons: [{ label: 'Record', value: 'record' }, { label: 'Cancel', value: 'cancel' }],
+    });
+    if (choice !== 'record') return;
+  }
+  c.act({ type: 'timeout', team }, {});
+}
+
 // ---- Menu ------------------------------------------------------------------------------------
 
 async function openMenu(c) {
@@ -544,7 +741,11 @@ async function openMenu(c) {
   const halftimeOk = phase.halftimeAfterCycleId !== null || (!phase.ended && !phase.regulationOver && d.cycles.some(x => x.closed));
   const keysOn = keysAreOn();
   const namesHidden = loadSettings().hideNames === true;
+  const [leftTeam, rightTeam] = leftRight(match);
   const buttons = [
+    { label: clockRunning(match) ? 'Pause clock' : 'Start clock', value: 'clock', disabled: phase.ended },
+    { label: `Timeout: ${teamName(match, leftTeam)}`, value: `timeout${leftTeam}`, disabled: phase.ended },
+    { label: `Timeout: ${teamName(match, rightTeam)}`, value: `timeout${rightTeam}`, disabled: phase.ended },
     { label: 'Halftime (score check)', value: 'halftime', disabled: !halftimeOk },
     { label: 'Time called / gong', value: 'time', disabled: phase.ended || phase.regulationOver || timeDone },
     { label: 'Swap sides', value: 'swap' },
@@ -569,6 +770,9 @@ async function openMenu(c) {
     : null;
   const choice = await api.ask({ title: 'Menu', body: update ?? [], buttons });
   switch (choice) {
+    case 'clock': return c.act({ type: 'clock', run: !clockRunning(c.state.match) }, {});
+    case 'timeout0': return takeTimeout(c, 0);
+    case 'timeout1': return takeTimeout(c, 1);
     case 'halftime': return halftimeFlow(c);
     case 'time': return callTime(c);
     case 'swap': return api.setDisplay({ leftTeam: 1 - leftRight(match)[0] });

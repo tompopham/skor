@@ -21,10 +21,10 @@ const CSS = `
 .filesgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
 .sheet { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
 .sheet .sheet-title { font-size: 18px; margin: 0; }
-.sheet .details, .sheet .key, .sheet .foot { color: var(--muted); font-size: 14px; margin: 0; overflow-wrap: anywhere; }
+.sheet .details, .sheet .key, .sheet .foot, .sheet .timeline { color: var(--muted); font-size: 14px; margin: 0; overflow-wrap: anywhere; }
 .sheet .wide { overflow-x: auto; max-width: 100%; }
 .sheet h2 { margin: 12px 0 0; }
-.sheet .num { text-align: right; }
+.sheet .num, .sheet .time { text-align: right; }
 .sheet td.seat, .sheet th.seat { display: table-cell; appearance: none; min-height: 0; padding: 4px 6px; cursor: inherit; text-align: center; background: var(--bg); }
 .sheet th.seat { background: var(--btn); white-space: normal; overflow-wrap: anywhere; min-width: 56px; max-width: 120px; }
 .sheet td.notes, .sheet td.set { display: table-cell; max-width: none; margin: 0; white-space: normal; overflow-wrap: break-word; min-width: 120px; }

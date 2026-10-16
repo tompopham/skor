@@ -4,6 +4,7 @@
 
 import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset } from './presets.js';
 import { newMatch } from './engine.js';
+import { defaultClockRules } from './clock.js';
 import { loadRoster, saveRoster } from './storage.js';
 import { h, newId } from './dom.js';
 
@@ -148,6 +149,53 @@ function bounceField(rules) {
 
 const group = (title, ...fields) => h('section', { class: 'group' }, h('h3', {}, title), h('div', { class: 'grid2' }, fields));
 
+// Clock and timeouts (v2 3.1), written into `rules.clock`: a countdown that is off or a number of whole
+// minutes for a half or the whole game, the timeouts a team may take (a number, or no limit) and how long
+// one lasts. A record from before version 2 has no clock rules, so the defaults are put in first. The boxes
+// of a switched-off value keep what they last showed, so ticking a box back on gives that back
+// (11 minutes a half, 1 timeout, until something else is typed).
+function clockFields(rules) {
+  rules.clock = { ...defaultClockRules(), ...rules.clock };
+  const { clock } = rules;
+  const memo = { minutes: clock.countdown ? Math.round(clock.countdown.length / 60) : 11, per: clock.countdown?.per ?? 'half', limit: clock.timeoutsPerTeam ?? 1 };
+
+  const countdownBox = h('input', { type: 'checkbox', 'aria-label': 'Countdown on' });
+  countdownBox.checked = clock.countdown !== null;
+  const minutes = numberInput({
+    read: () => memo.minutes, write: value => { memo.minutes = value; if (clock.countdown) clock.countdown.length = value * 60; },
+    min: 1, max: 600, label: 'Countdown length in minutes',
+  });
+  const per = h('select', { 'aria-label': 'Countdown is for' }, [['half', 'A half'], ['game', 'A game']].map(([value, name]) => h('option', { value }, name)));
+  per.value = memo.per;
+  per.addEventListener('change', () => { memo.per = per.value; if (clock.countdown) clock.countdown.per = per.value; });
+  const countdownOff = () => { minutes.disabled = !countdownBox.checked; per.disabled = !countdownBox.checked; };
+  countdownOff();
+  countdownBox.addEventListener('change', () => {
+    clock.countdown = countdownBox.checked ? { length: memo.minutes * 60, per: memo.per } : null;
+    countdownOff();
+  });
+
+  const noLimit = h('input', { type: 'checkbox', 'aria-label': 'No limit on timeouts' });
+  noLimit.checked = clock.timeoutsPerTeam === null;
+  const limit = numberInput({
+    read: () => memo.limit, write: value => { memo.limit = value; if (!noLimit.checked) clock.timeoutsPerTeam = value; },
+    min: 0, max: 20, label: 'Timeouts a team',
+  });
+  limit.disabled = noLimit.checked;
+  noLimit.addEventListener('change', () => {
+    limit.disabled = noLimit.checked;
+    clock.timeoutsPerTeam = noLimit.checked ? null : memo.limit;
+  });
+
+  return group('Clock and timeouts',
+    h('div', { class: 'optnum' }, h('label', { class: 'chk' }, countdownBox, h('span', {}, 'Countdown (minutes)')), minutes),
+    h('label', { class: 'f' }, h('span', {}, 'Countdown is for'), per),
+    h('label', { class: 'f' }, h('span', {}, 'Timeouts a team'), limit),
+    h('label', { class: 'chk' }, noLimit, h('span', {}, 'No limit')),
+    h('label', { class: 'f' }, h('span', {}, 'Timeout length (seconds)'),
+      pathNumber(rules, 'clock.timeoutSeconds', { min: 1, max: 600, label: 'Timeout length in seconds' })));
+}
+
 // Every value of the rules as an input (spec 5, "the values a preset holds"), plus the trivia
 // values for Consensus and GradWrite (spec 5.1). Edits go straight into `rules`.
 export function rulesPanel(rules) {
@@ -185,6 +233,8 @@ export function rulesPanel(rules) {
     selectField(rules, 'Overtime', 'overtime', [['suddenDeath', 'Sudden death'], ['threeThenSuddenDeath', 'Three starters, then sudden death'], ['none', 'None: a tie stands']]),
     selectField(rules, 'When time is called', 'atTime', [['finishCycle', 'Finish the cycle'], ['stopNow', 'Stop at once'], ['buzzMayAnswer', 'A buzz already in may answer']]),
     checkField(rules, 'Mark overtime results (ET)', 'etLabel')));
+
+  panels.push(clockFields(rules));
 
   if (rules.trivia) {
     const jackpot = h('div', { class: 'four' }, [0, 1, 2, 3].map(clue =>
@@ -315,7 +365,7 @@ export function renderSetup(root, state, api) {
       teams,
       details: Object.fromEntries(Object.entries(draft.details).map(([key, value]) => [key, value.trim()])),
       id: newId(),
-      now: Date.now(),
+      now: api.now(),
     });
     api.setUi({ setup: null }, false);
     api.startMatch(match);

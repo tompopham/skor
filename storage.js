@@ -7,6 +7,7 @@
 // null or an empty list, so a full or blocked store can never break the page.
 
 import { derive } from './engine.js';
+import { defaultClockRules } from './clock.js';
 
 export const KEYS = {
   index: 'scorer.index',
@@ -242,11 +243,23 @@ function fillTriviaDefaults(cycle) {
   if (cycle.eligible === undefined) cycle.eligible = null;
 }
 
+// A record saved before version 2 has no clock list, no times on its cycles and no clock rules, and the
+// clock code reads them (v2 1.1). They read as the defaults: the clock never started, nothing stamped, no
+// countdown and no limit on timeouts. Fields that are there are left alone.
+function fillClockDefaults(match) {
+  if (!Array.isArray(match.clock)) match.clock = [];
+  match.rules.clock = { ...defaultClockRules(), ...(isObject(match.rules.clock) ? match.rules.clock : {}) };
+  for (const cycle of match.cycles) {
+    if (cycle.openedAt === undefined) cycle.openedAt = null;
+    if (cycle.closedAt === undefined) cycle.closedAt = null;
+  }
+}
+
 const unreadable = error => ({ ok: false, error });
 
 // Reads a backup file's text, or a saved record: { ok: true, match } or { ok: false, error } with
-// a sentence for the person. Checks the pieces a match cannot do without, fills the trivia fields
-// an older record lacks, then runs derive() once, so a file that is JSON but not a scorer match is
+// a sentence for the person. Checks the pieces a match cannot do without, fills the trivia and clock
+// fields an older record lacks, then runs derive() once, so a file that is JSON but not a scorer match is
 // refused here and cannot crash a screen later.
 export function parseBackup(text) {
   if (typeof text !== 'string' || text.trim() === '') return unreadable('There is nothing to read: the text is empty, so it is not valid JSON.');
@@ -264,6 +277,7 @@ export function parseBackup(text) {
   }
   if (!Array.isArray(match.cycles) || !match.cycles.every(isObject)) return unreadable('That backup has no list of cycles.');
   match.cycles.forEach(fillTriviaDefaults);
+  fillClockDefaults(match);
   try {
     derive(match);
   } catch (error) {

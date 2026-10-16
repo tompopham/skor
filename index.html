@@ -181,6 +181,35 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 .rc .run { font-variant-numeric: tabular-nums; color: var(--muted); }
 .rc .flag { grid-column: 1 / -1; color: var(--bad); font-size: 12px; }
 
+/* The clock (v2 3.3). The scoring screen has a fixed slot for it: one box, 48 px tall, in every state (a button under a
+   countdown, plain text without one or after the match has ended, whatever it says), so no button moves when the match
+   ends, is undone, or has its rules edited. From 640 px wide it sits in the top bar, between the title and Undo, Redo
+   and Menu. On a phone the title row has no room for it, and a row of its own would push the longest scoring pages
+   (University Challenge's bonus, Consensus's Streak) past the screen, so there it leaves the top bar's flow and sits on the
+   row of the last-event line, at the right: 124 px wide, 48 px tall, with the line cut short beside it (its 6 px gap under the
+   title row is the top bar's 1 px border and 8 px margin, so the slot and the line start at the same height). */
+.top.scoretop { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title acts"; align-items: center; }
+.scoretop .toptitle { grid-area: title; min-width: 0; }
+.scoretop .acts { grid-area: acts; }
+.clockslot { display: grid; place-items: center; margin: 0; height: 48px; padding: 0 8px; border: 1px solid var(--line); background: var(--bg); font: bold 18px/1.2 Arial, Helvetica, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.clockslot { background: var(--btn); }
+@media (max-width: 639px) {
+  .top.scoretop { position: relative; }
+  .scoretop .clockslot { position: absolute; right: 0; top: calc(100% + 9px); width: 124px; }
+  .scoretop + .score-layout .statusline { height: 48px; padding: 5px 132px 5px 0; }
+}
+@media (min-width: 640px) {
+  .top.scoretop { grid-template-columns: minmax(0, 1fr) 150px auto; grid-template-areas: "title clock acts"; }
+  .scoretop .clockslot { grid-area: clock; font-size: 20px; }
+}
+/* The banner at 0:00 and the timeout box: a layer fixed to the bottom of the screen, over the page and not in it, so
+   no button moves when one appears. The layer lets taps through; only its boxes take them. Below the dialogs (10). */
+.timelayer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: grid; gap: 6px; max-width: 900px; margin: 0 auto; padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px)); pointer-events: none; }
+.timebox { pointer-events: auto; display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; background: var(--bg); border: 2px solid var(--fg); }
+.timebox .timetext { flex: 1 1 0; min-width: 0; font-weight: bold; overflow-wrap: anywhere; }
+.timebox .timeleft { flex: none; font: bold 28px/1 Arial, Helvetica, sans-serif; font-variant-numeric: tabular-nums; }
+.timebox .btn { flex: none; min-width: 80px; }
+
 /* Update notice (spec 3.1): shown above Home, Past matches, Setup and the scoresheet when a new version is waiting;
    never above the scoring screen (it would move the buttons: R36, there it is one line in the menu) or the room
    board. Plain black border, not the red of a warning: nothing is wrong. */
@@ -230,7 +259,7 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
   .sheetview .sheet table { width: 100%; margin: 2mm 0; font-size: 8.5pt; }
   .sheetview .sheet th, .sheetview .sheet td { padding: 0.8mm 1.5mm; border: 1px solid #000; font-size: 8.5pt; white-space: normal; vertical-align: top; text-align: left; background: none; color: #000; }
   .sheetview .sheet th { background: #e6e6e6; }
-  .sheetview .sheet .num { text-align: right; white-space: nowrap; }
+  .sheetview .sheet .num, .sheetview .sheet .time { text-align: right; white-space: nowrap; }
   .sheetview .sheet td.seat, .sheetview .sheet th.seat { text-align: center; white-space: nowrap; min-width: 0; }
   .sheetview .sheet th.seat { max-width: 20mm; white-space: normal; background: #e6e6e6; }
   .sheetview .sheet td.set { font-size: 7.5pt; min-width: 0; }

@@ -5,9 +5,10 @@
 // there is none. Teams are listed left team first, as on the screen (v2 2.4), by leftRight(); the
 // record itself is never reordered. Stats are shown for people: "–" where there is nothing to
 // divide by, bonus conversion as a percentage, points per 20 and points per bonus to two
-// decimals.
+// decimals. Times (v2 3.4) come from clock.js: the scoresheet's time line and each question's "Closed at".
 
 import { FORMATS } from './engine.js';
+import { timeSummary, formatLength } from './clock.js';
 import { leftRight, repeatText } from './view-common.js';
 
 const DASH = '–';
@@ -200,12 +201,14 @@ const BYTE_ORDER_MARK = '\uFEFF';
 // One row per cycle, then a blank line and a row per named player, then a blank line and a row per
 // team, the left team's first throughout. A starter that nobody got says "dead" in the Bonus column. A cycle left after the end of
 // the match is listed with what happened and "after the end of the match, not counted" in its Type,
-// and its points left empty, since they are in no total.
+// and its points left empty, since they are in no total. The last column, "Closed at", is the clock time
+// the question closed (m:ss from the clock's first start), blank where the record has none (v2 3.4).
 export function toCSV(match, d) {
   const order = leftRight(match);
   const [a, b] = order.map(team => teamName(match, team));
+  const closedAt = timeSummary(match, d).closedAt;
   const lines = [csvRow(['Question', 'Type', `${a} buzzes`, `${b} buzzes`, 'Bonus',
-    `${a} points`, `${b} points`, `${a} total`, `${b} total`])];
+    `${a} points`, `${b} points`, `${a} total`, `${b} total`, 'Closed at'])];
   match.cycles.forEach((cycle, i) => {
     const dc = d.cycles[i];
     const status = statusWords(dc);
@@ -213,7 +216,7 @@ export function toCSV(match, d) {
     const points = afterEnd(dc) ? ['', ''] : order.map(team => dc.total[team]);
     lines.push(csvRow([dc.number, status.length > 0 ? `${type} (${status.join('; ')})` : type,
       ...order.map(team => teamEntries(match, cycle, dc, team)),
-      cycle.dead ? 'dead' : bonusWords(cycle, dc), ...points, ...order.map(team => dc.running[team])]));
+      cycle.dead ? 'dead' : bonusWords(cycle, dc), ...points, ...order.map(team => dc.running[team]), closedText(closedAt[i])]));
   });
   lines.push('', csvRow(['Player', 'Team', 'Seat', ...PLAYER_COLUMNS.map(c => c.header)]));
   for (const [team, seat, stats] of namedPlayers(match, d)) {
@@ -222,6 +225,25 @@ export function toCSV(match, d) {
   lines.push('', csvRow(['Team', ...TEAM_COLUMNS.map(c => c.header)]));
   for (const team of order) lines.push(csvRow([teamName(match, team), ...TEAM_COLUMNS.map(c => c.value(d.stats.teams[team]))], 1));
   return `${BYTE_ORDER_MARK}${lines.join('\n')}\n`;
+}
+
+// ---- Times (v2 3.4) ---------------------------------------------------------------------------
+
+// A cycle's close as m:ss from the first start, or nothing where the record has none.
+const closedText = ms => (ms === null ? '' : formatLength(ms));
+
+// "Game 24:10 (first half 11:52, second half 12:18). 21 questions, 1:09 each on average. Timeouts: Edinburgh A
+// after Q8." The bracket is left out until a halftime has been reached, and the Timeouts sentence when there
+// are none. Where the game's length cannot be worked out (an old record) the line is "Time: not recorded.",
+// still followed by any timeouts. A timeout before the first question reads "before Q1".
+function timeLineHTML(match, d) {
+  const time = timeSummary(match, d);
+  const timeouts = time.timeouts.length === 0 ? ''
+    : ` Timeouts: ${time.timeouts.map(t => `${nameHTML(teamName(match, t.team))} ${t.afterNumber === 0 ? 'before Q1' : `after Q${t.afterNumber}`}`).join(', ')}.`;
+  if (time.game === null) return `<p class="timeline">Time: not recorded.${timeouts}</p>`;
+  const halves = time.halves === null ? '' : ` (first half ${formatLength(time.halves[0])}, second half ${formatLength(time.halves[1])})`;
+  const counted = d.cycles.filter(dc => dc.closed && !afterEnd(dc)).length;
+  return `<p class="timeline">Game ${formatLength(time.game)}${halves}. ${counted} ${counted === 1 ? 'question' : 'questions'}, ${formatLength(time.average)} each on average.${timeouts}</p>`;
 }
 
 // ---- The scoresheet page ----------------------------------------------------------------------
@@ -241,12 +263,12 @@ body { margin: 0; padding: 10mm; background: #fff; color: #000; font: 10pt/1.3 s
 h1 { margin: 0 0 1mm; font-size: 15pt; }
 h2 { margin: 6mm 0 1mm; font-size: 11pt; }
 p { margin: 1mm 0; }
-.details, .key, .foot { font-size: 8.5pt; }
+.details, .key, .foot, .timeline { font-size: 8.5pt; }
 .wide { overflow-x: auto; }
 table { width: 100%; margin: 2mm 0; border-collapse: collapse; }
 th, td { padding: 0.8mm 1.5mm; border: 1px solid #000; font-size: 8.5pt; text-align: left; vertical-align: top; }
 th { background: #e6e6e6; }
-.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.num, .time { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .seat { text-align: center; white-space: nowrap; }
 th.seat { max-width: 20mm; white-space: normal; overflow-wrap: anywhere; }
 .stats th { white-space: normal; }
@@ -274,6 +296,7 @@ function detailsLine(match) {
 }
 
 const numCell = value => `<td class="num">${esc(value)}</td>`;
+const timeCell = value => `<td class="time">${esc(value)}</td>`;
 
 // What a seat did in a cycle, in points: "P 15", "10", "N -5", "W 0", "40 (clue 1)", "S 3 (15)".
 function seatMarks(cycle, dc, team, seat) {
@@ -308,16 +331,17 @@ function quarterRows(match, d) {
 function cycleTable(match, d, groups) {
   const { rules } = match;
   const order = leftRight(match);
+  const closedAt = timeSummary(match, d).closedAt;
   const showType = Boolean(rules.trivia) || rules.starterTypes.on || match.cycles.some(c => c.type !== 'normal');
   const extras = [['bonus', 'Bonus'], ['bounce', 'Bounce'], ['reward', 'Reward']].filter(([group]) => groups.has(group));
   const perTeam = 4 + extras.length + 2;
   const leading = 1 + (showType ? 1 : 0) + (groups.has('bonus') ? 1 : 0);
-  const columns = leading + 2 * perTeam + 1;
+  const columns = leading + 2 * perTeam + 2;
 
   const head1 = ['<th rowspan="2">Q</th>', showType ? '<th rowspan="2">Type</th>' : '',
     groups.has('bonus') ? '<th rowspan="2">Bonus set</th>' : '',
     ...order.map(team => `<th colspan="${perTeam}">${nameHTML(teamName(match, team))}</th>`),
-    '<th rowspan="2">Notes</th>'].join('');
+    '<th rowspan="2">Closed at</th>', '<th rowspan="2">Notes</th>'].join('');
   const head2 = order.map(team => [
     ...[0, 1, 2, 3].map(seat => `<th class="seat">${nameHTML(seatName(match, team, seat) || DASH)}</th>`),
     ...extras.map(([, label]) => `<th class="num">${label}</th>`),
@@ -351,7 +375,7 @@ function cycleTable(match, d, groups) {
     rows.push(`<tr class="cycle${counted ? '' : ' after-end'}"><td class="num">${dc.number}</td>`
       + (showType ? `<td>${esc(typeLabel(match, cycle, dc))}</td>` : '')
       + (groups.has('bonus') ? `<td class="set">${esc(bonusWords(cycle, dc))}</td>` : '')
-      + order.map(teamCells).join('') + `<td class="notes">${notes.join('<br>')}</td></tr>`);
+      + order.map(teamCells).join('') + timeCell(closedText(closedAt[i])) + `<td class="notes">${notes.join('<br>')}</td></tr>`);
     rows.push(...markerRows(i));
   });
   const body = rows.length > 0 ? rows.join('\n') : `<tr><td colspan="${columns}">No questions yet.</td></tr>`;
@@ -398,6 +422,7 @@ export function toScoresheetHTML(match, d) {
 <body>
 <h1>${resultPieces(match, d).map(([kind, text]) => (kind === 'name' ? nameHTML(text) : esc(text))).join('')}</h1>
 <p class="details">${esc(detailsLine(match))}</p>
+${timeLineHTML(match, d)}
 ${cycleTable(match, d, groups)}
 <p class="key">Each player's cell shows the points from the buzz: P is a power, N a wrong interruption, W a wrong answer after the question ended, S a Streak turn.</p>
 ${statsTables(match, d, groups)}
