@@ -4,17 +4,20 @@
 // is drawn from derive() of the match; every change goes through api.dispatch, so the engine alone
 // decides what is allowed and this file only shows the refusal. The clock's slot in the top bar, the
 // banner at 0:00 and the timeout box (v2 3.3) are here too: they show what clock.js works out from the
-// record at api.now(), and the one 1 s ticker only repaints their text.
+// record at api.now(), and the one 1 s ticker only repaints their text. Who sits in a seat is the line-up's
+// (v2 4.4; lineup.js): the seat buttons show the player sitting now, the recent list the player who sat in
+// each question, and the menu's Swap players asks for the team, the seat and who comes in.
 
 import { derive, applyAction, FORMATS } from './engine.js';
-import { keyToCommand, tapGuard } from './keys.js';
+import { keyToCommand, tapGuard, sittingNow } from './keys.js';
+import { lineupsOf, playersOf, playerName } from './lineup.js';
 import { loadSettings, saveSettings } from './storage.js';
 import { resultLine } from './files.js';
 import { clockRunning, elapsed, countdownState, defaultClockRules, timeoutsUsed, timeSummary, formatLength } from './clock.js';
 import { unlockSound, gong, beep } from './sound.js';
 import { h } from './dom.js';
 import {
-  fmt, MINUS, teamName, seatName, leftRight, flagText, repeatText, refusalText, STREAK_MAX, triviaFormats, select, check,
+  fmt, MINUS, teamName, leftRight, flagText, repeatText, refusalText, STREAK_MAX, triviaFormats, select, check,
 } from './view-common.js';
 import { renderCycleEditor, renderRulesEditor } from './view-editor.js';
 
@@ -84,6 +87,8 @@ function onKey(event) {
 function makeContext(state, api) {
   const match = state.match;
   const c = { state, api, match, d: derive(match), ui: state.ui };
+  c.seats = sittingNow(match, c.d);                                  // who sits where now: [team A's four seats, team B's], ids or null
+  c.who = (team, seat) => playerName(match, team, c.seats[team][seat]);   // the name of who sits there now, or '' when nobody does
   c.say = text => api.setUi({ msg: text });
   // Applies one action or a list; on success the half-entered state (chosen seat, Streak count) goes.
   c.act = (actions, patch = { selected: null, streakN: 0 }) => {
@@ -139,12 +144,13 @@ function checkLine(match, d, cycleId = null) {
   return `${teamName(match, left)} ${fmt(running[left])}, ${teamName(match, right)} ${fmt(running[right])} after ${done ? done.number : 0}`;
 }
 
-// A short account of a cycle for the recent list.
-function describe(match, cycle, dc) {
+// A short account of a cycle for the recent list. `lineup` is the cycle's own (lineupsOf), so a buzz is named for the
+// player who sat in the seat that question, whoever sits there now.
+function describe(match, cycle, dc, lineup) {
   const bits = [];
   if (match.rules.trivia) bits.push(`[${FORMATS[dc.format] ?? dc.format}]`);
   else if (match.rules.starterTypes.on && cycle.type !== 'normal') bits.push(`[${cycle.type}]`);
-  const name = (team, seat) => seatName(match, team, seat) || `seat ${seat + 1}`;
+  const name = (team, seat) => playerName(match, team, lineup[team][seat]) || `seat ${seat + 1}`;
   cycle.buzzes.forEach(b => bits.push(`${name(b.team, b.seat)} ${RESULT_WORDS[b.result]}${dc.format === 'jackpot' ? ` clue ${(b.clue ?? 0) + 1}` : ''}`));
   dc.streak.forEach(s => bits.push(`${name(s.team, s.seat)} streak ${s.answers}${s.wrong ? ' wrong' : ''}`));
   cycle.lostTurn.forEach(t => bits.push(`${teamName(match, t)} lost turn`));
@@ -174,7 +180,7 @@ function renderMain(root, state, api) {
   trackStage(c.match, c.d);
   const { ui, d } = c;
   // A chosen seat that can no longer answer (its team was wrong, the stage moved on) is dropped.
-  if (ui.selected && !seatInfo(c.match, d, ui.selected.team, ui.selected.seat).on) ui.selected = null;
+  if (ui.selected && !seatInfo(c, ui.selected.team, ui.selected.seat).on) ui.selected = null;
 
   root.append(
     topBar(c),
@@ -258,8 +264,8 @@ function picker(c) {
 async function askSplit(c) {
   const { match, api } = c;
   const boxes = [0, 1].map(team => [0, 1, 2, 3].map(seat => {
-    const named = seatName(match, team, seat) !== '';
-    return check(named ? seatName(match, team, seat) : `Seat ${seat + 1} (empty)`, false, () => {}, { disabled: !named, 'data-team': team, 'data-seat': seat });
+    const named = c.who(team, seat) !== '';
+    return check(named ? c.who(team, seat) : `Seat ${seat + 1} (empty)`, false, () => {}, { disabled: !named, 'data-team': team, 'data-seat': seat });
   }));
   const body = [h('p', { class: 'dtext' }, 'Tick one or two players from each team for this set. Only they may buzz.'),
     ...[0, 1].map(team => h('fieldset', { class: 'splitset' }, h('legend', {}, teamName(match, team)), boxes[team]))];
@@ -278,9 +284,9 @@ async function askSplit(c) {
 
 // Whether a seat can answer now: someone is in it, its team has a turn, it is not in jail, and a
 // Split names it. The same test keys.js makes for the number keys, so a grey seat has a dead key.
-function seatInfo(match, d, team, seat) {
-  const { open } = d;
-  const name = seatName(match, team, seat);
+function seatInfo(c, team, seat) {
+  const { open } = c.d;
+  const name = c.who(team, seat);
   const jailed = open.jailed?.[team]?.[seat] === true;
   let on = open.stage === 'starter' && open.liveTeams[team] && name !== '' && !jailed;
   if (on && open.format === 'split') on = open.eligible?.[team]?.includes(seat) === true;
@@ -294,9 +300,10 @@ function teamsView(c) {
     h('div', { class: 'tname', title: teamName(match, team) }, h('span', { class: 'tn' }, teamName(match, team))),
     h('div', { class: 'score', 'data-score': team }, fmt(d.scores[team])),
     seats.map((seat, row) => {
-      const info = seatInfo(match, d, team, seat);
+      const info = seatInfo(c, team, seat);
       const on = ui.selected?.team === team && ui.selected?.seat === seat;
-      const points = d.stats.players[team][seat].tossupPoints;
+      // The points are the player's own, whoever sat in the seat before.
+      const points = d.stats.players[team].find(player => player.id === c.seats[team][seat])?.tossupPoints ?? 0;
       return h('button', {
         type: 'button', class: on ? 'seat on' : 'seat', disabled: !info.on, 'aria-pressed': String(on), 'data-team': team, 'data-seat': seat,
         'aria-label': info.name ? `${teamName(match, team)}, seat ${seat + 1}, ${info.name}${info.jailed ? ', out' : ''}, ${points} points` : `${teamName(match, team)}, seat ${seat + 1}, empty`,
@@ -340,7 +347,7 @@ function starterBar(c) {
   const starter = open.stage === 'starter';
   const streak = open.format === 'streak';
   const sel = ui.selected ?? null;
-  const who = sel ? seatName(match, sel.team, sel.seat) : '';
+  const who = sel ? c.who(sel.team, sel.seat) : '';
   // Two short teams in jail can leave nobody live: Dead stays on, so the scorer is never stuck.
   const stuck = starter && !open.liveTeams[0] && !open.liveTeams[1];
   const [leftTeam, rightTeam] = leftRight(match);
@@ -508,7 +515,7 @@ async function callTime(c) {
   if (sel && match.rules.atTime !== 'finishCycle' && d.open.stage === 'starter') {
     const choice = await api.ask({
       title: 'Time called with a buzz in',
-      body: `${seatName(match, sel.team, sel.seat)} has buzzed in. Does the answer count?`,
+      body: `${c.who(sel.team, sel.seat)} has buzzed in. Does the answer count?`,
       buttons: [{ label: 'Yes, the answer counts', value: 'allow', primary: true }, { label: 'No, it does not count', value: 'no' }, { label: 'Cancel', value: 'cancel' }],
     });
     if (choice === 'cancel') return;
@@ -731,6 +738,99 @@ async function takeTimeout(c, team) {
   c.act({ type: 'timeout', team }, {});
 }
 
+// ---- Swap players (v2 4.4) -------------------------------------------------------------------
+// Menu, Swap players: the team, the seat, then who comes in (a bench player or a starter who is not sitting, the
+// seat left empty, or a new name typed in, which joins the bench). Each step is a dialog, and Cancel or the back
+// button on any of them ends it with nothing recorded. A new name is added to the bench and swapped in as one
+// version, so one Undo takes both back. The engine alone decides: a swap outside the rules' windows comes back
+// refused with the rules' words, the page asks, and Record sends it again as confirmed.
+
+const WINDOW_WORDS = { halftime: 'at halftime', beforeOvertime: 'before overtime', timeout: 'after a timeout', quarter: 'between quarters' };
+const CANCEL = { label: 'Cancel', value: 'cancel' };
+
+// "UK quizbowl allows swaps only at halftime or before overtime (ACF C.12). Record it anyway?" The bracket is left
+// out when the rules cite no clause, and rules with no window at all say so.
+function outsideWindowText(match, { windows, source }) {
+  const name = match.rules.name || 'These rules';
+  const clause = source ? ` (${source})` : '';
+  const words = (windows ?? []).map(kind => WINDOW_WORDS[kind] ?? kind);
+  if (words.length === 0) return `${name} has no swap window${clause}. Record it anyway?`;
+  const list = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} or ${words.at(-1)}`;
+  return `${name} allows swaps only ${list}${clause}. Record it anyway?`;
+}
+
+// The name of a player who is not on the bench yet, typed in a box; asks again until there is one. undefined if cancelled.
+async function askNewName(api) {
+  const input = h('input', {
+    type: 'text', maxlength: 40, autocomplete: 'off', autocapitalize: 'words', autocorrect: 'off', spellcheck: 'false', 'aria-label': "New player's name",
+  });
+  const note = h('p', { class: 'msg' });
+  for (;;) {
+    const choice = await api.ask({
+      title: 'New player', body: ['The new player joins the bench and takes the seat.', input, note],
+      buttons: [{ label: 'Swap in', value: 'ok', primary: true }, CANCEL],
+    });
+    if (choice !== 'ok') return undefined;
+    const name = input.value.trim();
+    if (name !== '') return name;
+    note.textContent = 'Type a name.';
+  }
+}
+
+async function swapFlow(c) {
+  const { match, api } = c;
+  const teamChoice = await api.ask({
+    title: 'Swap players: which team?',
+    buttons: [...leftRight(match).map(t => ({ label: teamName(match, t), value: `team${t}` })), CANCEL],
+  });
+  if (teamChoice !== 'team0' && teamChoice !== 'team1') return;
+  const team = Number(teamChoice.slice(4));
+
+  const seatChoice = await api.ask({
+    title: `Swap players: ${teamName(match, team)}, which seat?`,
+    buttons: [...[0, 1, 2, 3].map(seat => ({ label: `Seat ${seat + 1}: ${c.who(team, seat) || 'empty'}`, value: `seat${seat}` })), CANCEL],
+  });
+  if (!/^seat[0-3]$/.test(seatChoice ?? '')) return;
+  const seat = Number(seatChoice.slice(4));
+
+  // Everyone the team has who is not in a seat now: the bench, and starters who have gone off. A name used twice says which is which.
+  const candidates = playersOf(match, team).filter(p => !c.seats[team].includes(p.id));
+  const label = p => (candidates.filter(other => other.name === p.name).length > 1
+    ? `${p.name} (${p.seat === null ? 'bench' : `started in seat ${p.seat + 1}`})` : p.name);
+  const here = c.who(team, seat);
+  const who = await api.ask({
+    title: `Seat ${seat + 1}: who comes in?`,
+    body: here ? `${here} is in seat ${seat + 1} now.` : `Seat ${seat + 1} is empty.`,
+    buttons: [
+      ...candidates.map(p => ({ label: label(p), value: `player:${p.id}` })),
+      { label: 'Leave the seat empty', value: 'empty', disabled: here === '' },
+      { label: 'Someone new', value: 'new' }, CANCEL,
+    ],
+  });
+  let player = null;
+  let name;
+  if (who === 'new') {
+    name = await askNewName(api);
+    if (name === undefined) return;
+    player = `b${(match.teams[team].bench ?? []).length}`;
+  } else if (typeof who === 'string' && who.startsWith('player:')) player = who.slice('player:'.length);
+  else if (who !== 'empty') return;
+
+  const swap = { type: 'sub', team, seat, player };
+  const actions = name === undefined ? [swap] : [{ type: 'addBench', team, name }, swap];
+  const patch = { selected: null, streakN: 0 };
+  let result = api.dispatchAll(actions, patch);
+  if (!result.ok && result.error.code === 'outside-window') {
+    const choice = await api.ask({
+      title: 'Swap outside the window?', body: outsideWindowText(match, result.error),
+      buttons: [{ label: 'Record', value: 'record' }, CANCEL],
+    });
+    if (choice !== 'record') return;
+    result = api.dispatchAll(actions.map(action => (action.type === 'sub' ? { ...action, confirmed: true } : action)), patch);
+  }
+  if (!result.ok) c.say(refusalText(result.error));
+}
+
 // ---- Menu ------------------------------------------------------------------------------------
 
 async function openMenu(c) {
@@ -741,12 +841,14 @@ async function openMenu(c) {
   const halftimeOk = phase.halftimeAfterCycleId !== null || (!phase.ended && !phase.regulationOver && d.cycles.some(x => x.closed));
   const keysOn = keysAreOn();
   const namesHidden = loadSettings().hideNames === true;
+  const swapReady = d.open.cycleId === null;   // a swap is made between questions (the engine refuses it while one is open)
   const [leftTeam, rightTeam] = leftRight(match);
   const buttons = [
     { label: clockRunning(match) ? 'Pause clock' : 'Start clock', value: 'clock', disabled: phase.ended },
     { label: `Timeout: ${teamName(match, leftTeam)}`, value: `timeout${leftTeam}`, disabled: phase.ended },
     { label: `Timeout: ${teamName(match, rightTeam)}`, value: `timeout${rightTeam}`, disabled: phase.ended },
     { label: 'Halftime (score check)', value: 'halftime', disabled: !halftimeOk },
+    { label: swapReady ? 'Swap players' : 'Swap players (between questions only)', value: 'subs', disabled: !swapReady },
     { label: 'Time called / gong', value: 'time', disabled: phase.ended || phase.regulationOver || timeDone },
     { label: 'Swap sides', value: 'swap' },
     { label: 'Reverse seat order', value: 'reverse' },
@@ -774,6 +876,7 @@ async function openMenu(c) {
     case 'timeout0': return takeTimeout(c, 0);
     case 'timeout1': return takeTimeout(c, 1);
     case 'halftime': return halftimeFlow(c);
+    case 'subs': return swapFlow(c);
     case 'time': return callTime(c);
     case 'swap': return api.setDisplay({ leftTeam: 1 - leftRight(match)[0] });
     case 'reverse': return api.setDisplay({ seatOrder: match.display?.seatOrder === 'desc' ? 'asc' : 'desc' });
@@ -870,10 +973,11 @@ function legend(c) {
 function recentList(c) {
   const { match, d, api } = c;
   const [left, right] = leftRight(match);
+  const lineups = lineupsOf(match);
   const rows = d.cycles.slice(-10).reverse().map(dc => h('button', {
     type: 'button', class: 'btn rc', 'data-cycle': dc.id, onclick: () => api.setUi({ sub: { kind: 'cycle', cycleId: dc.id }, selected: null }),
   },
-  h('span', { class: 'what' }, `Q${dc.number} ${describe(match, match.cycles[dc.number - 1], dc)}`),
+  h('span', { class: 'what' }, `Q${dc.number} ${describe(match, match.cycles[dc.number - 1], dc, lineups[dc.number - 1])}`),
   h('span', { class: 'run' }, `${fmt(dc.running[left])}–${fmt(dc.running[right])}`),
   dc.flags.length > 0 ? h('span', { class: 'flag' }, dc.flags.map(flagText).join('; ')) : null));
   return h('div', { class: 'recent', id: 'recent' }, h('h2', {}, 'Recent questions'),

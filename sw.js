@@ -4,7 +4,7 @@
 // old one and WAITS. It takes over only when the page posts 'skipWaiting' (the Reload button on "Update
 // ready: reload when the match is over"), so a match is never reloaded out from under the scorer.
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const CACHE = `scorer-${VERSION}`;
 
 // Every file the page loads. test/version.test.mjs fails if a file in site/ is missing from this list, or
@@ -19,6 +19,7 @@ const FILES = [
   './files.js',
   './history.js',
   './keys.js',
+  './lineup.js',
   './presets.js',
   './sound.js',
   './storage.js',

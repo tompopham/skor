@@ -5,9 +5,11 @@
 
 import { derive, applyAction, ruleChangeDiff } from './engine.js';
 import { rulesPanel } from './view-setup.js';
+import { swapLines } from './files.js';
+import { lineupAt, playerName } from './lineup.js';
 import { h } from './dom.js';
 import {
-  ensureStyles, fmt, teamName, seatName, isCorrect, leftRight, flagText, refusalText, STREAK_MAX, triviaFormats,
+  ensureStyles, fmt, teamName, isCorrect, leftRight, flagText, refusalText, STREAK_MAX, triviaFormats,
   field, select, check, numberBox,
 } from './view-common.js';
 
@@ -118,15 +120,19 @@ export function renderCycleEditor(root, state, api) {
     return true;
   };
 
+  // Who sat in each seat in this question (v2 4.4): the line-up for this cycle's place, so an old question names
+  // who really sat there and a later one the player swapped in. A seat nobody sat in has no name, as in version 1.
+  const lineup = lineupAt(match, index);
+  const seatName = (team, seat) => playerName(match, team, lineup[team][seat]);
   const seatChoices = (current = null) => {
     const options = [0, 1].flatMap(team => [0, 1, 2, 3]
-      .filter(seat => seatName(match, team, seat) !== '' || (current && current.team === team && current.seat === seat))
-      .map(seat => [`${team}:${seat}`, `${teamName(match, team)}: ${seatName(match, team, seat) || `seat ${seat + 1}`}`]));
+      .filter(seat => seatName(team, seat) !== '' || (current && current.team === team && current.seat === seat))
+      .map(seat => [`${team}:${seat}`, `${teamName(match, team)}: ${seatName(team, seat) || `seat ${seat + 1}`}`]));
     return options;
   };
   const firstFree = used => {
     const team = [0, 1].find(t => !used.includes(t)) ?? 0;
-    return { team, seat: [0, 1, 2, 3].find(seat => seatName(match, team, seat) !== '') ?? 0 };
+    return { team, seat: [0, 1, 2, 3].find(seat => seatName(team, seat) !== '') ?? 0 };
   };
   const seatSelect = (entry, label) => select(seatChoices(entry), `${entry.team}:${entry.seat}`, value => {
     [entry.team, entry.seat] = value.split(':').map(Number);
@@ -146,10 +152,10 @@ export function renderCycleEditor(root, state, api) {
     if (draft.format === 'split') {
       draft.eligible ??= [[], []];
       starter.push(...[0, 1].map(team => h('fieldset', { class: 'splitset' }, h('legend', {}, `${teamName(match, team)}: on this set`),
-        [0, 1, 2, 3].map(seat => check(seatName(match, team, seat) || `Seat ${seat + 1} (empty)`, draft.eligible[team].includes(seat), on => {
+        [0, 1, 2, 3].map(seat => check(seatName(team, seat) || `Seat ${seat + 1} (empty)`, draft.eligible[team].includes(seat), on => {
           draft.eligible[team] = on ? [...draft.eligible[team], seat].sort() : draft.eligible[team].filter(s => s !== seat);
           redraw();
-        }, { disabled: seatName(match, team, seat) === '' })))));
+        }, { disabled: seatName(team, seat) === '' })))));
     }
   }
   const resultOptions = [...(rules.tossup.power != null ? [['power', `Power ${rules.tossup.power}`]] : []), ['ten', String(rules.tossup.ten)], ['neg', 'Neg'], ['wrong', 'Wrong']];
@@ -278,18 +284,19 @@ export function renderCycleEditor(root, state, api) {
     const markers = match.markers.filter(m => m.afterCycleId === cycleId);
     const before = index > 0 ? `Q${index}` : null;
     const quarterNumber = marker => match.markers.filter(m => m.type === 'quarter').indexOf(marker) + 1;
-    // What a marker is called in the question. A quarter has its number and a timeout its team.
+    // What a marker is called in the question. A quarter has its number, a timeout its team and a swap its words.
     const wordsFor = marker => {
       if (marker.type === 'quarter') return `the end of quarter ${quarterNumber(marker)}`;
       if (marker.type === 'timeout') return `the timeout for ${teamName(match, marker.team)}`;
+      if (marker.type === 'sub') return `the swap ${swapLines(match).find(line => line.marker === marker)?.what ?? ''}`.trim();
       return { ended: 'the end of the match', halftime: 'halftime', timeCalled: 'the time-called mark' }[marker.type] ?? marker.type;
     };
     const body = [`Q${number} and everything entered on it will be removed. Later questions move up one and the scores are worked out again.`];
     for (const marker of markers) {
       const what = wordsFor(marker);
       if (before) body.push(`Q${number} carries ${what}. Deleting it moves ${what} back to ${before}.`);
-      // A timeout was taken, so with no earlier question it stays, now before the first one (the engine's deleteCycle).
-      else if (marker.type === 'timeout') body.push(`Q${number} carries ${what}. Deleting it keeps ${what}, now before the first question.`);
+      // A timeout was taken and a swap made, so with no earlier question each stays, now before the first one (the engine's deleteCycle).
+      else if (marker.type === 'timeout' || marker.type === 'sub') body.push(`Q${number} carries ${what}. Deleting it keeps ${what}, now before the first question.`);
       else body.push(`Q${number} carries ${what}. Deleting it removes ${what}, as there is no earlier question to move it to.`);
     }
     const choice = await api.ask({

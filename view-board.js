@@ -11,7 +11,8 @@
 import { derive } from './engine.js';
 import { loadSettings, KEYS } from './storage.js';
 import { h } from './dom.js';
-import { fmt, teamName, seatName, leftRight } from './view-common.js';
+import { lineupAt, playerName } from './lineup.js';
+import { fmt, teamName, leftRight } from './view-common.js';
 
 export const CHANNEL_NAME = 'skor';
 const WAIT_MS = 2000;
@@ -24,28 +25,31 @@ export const looksLikeMatch = match => match !== null && typeof match === 'objec
   && match.rules !== null && typeof match.rules === 'object' && Array.isArray(match.markers);
 
 // The player the last event names, found the way derive() finds its last event: the newest cycle with a
-// buzz or a Streak turn. A dead starter or a lost turn names no player.
+// buzz or a Streak turn. A dead starter or a lost turn names no player. `index` is the cycle's place, whose
+// line-up says who sat in the seat then.
 function lastActor(match, d) {
   for (let i = match.cycles.length - 1; i >= 0; i -= 1) {
     const cycle = match.cycles[i];
     const derived = d.cycles[i];
     if (cycle.dead) return null;
     const buzz = cycle.buzzes.at(-1);
-    if (buzz) return { number: derived.number, team: buzz.team, seat: buzz.seat };
+    if (buzz) return { index: i, number: derived.number, team: buzz.team, seat: buzz.seat };
     const turn = derived.streak.at(-1);
-    if (turn) return { number: derived.number, team: turn.team, seat: turn.seat };
+    if (turn) return { index: i, number: derived.number, team: turn.team, seat: turn.seat };
     if (cycle.lostTurn.length > 0) return null;
   }
   return null;
 }
 
-// derive()'s "Q12: Smith, power". With names hidden the player becomes their team: "Q12: Edinburgh A, power".
-// If the line is not in the shape this expects, only the question number is shown, so a name never leaks.
+// derive()'s "Q12: Smith, power", naming whoever sat in the seat in that question (v2 4.4). With names hidden the
+// player becomes their team: "Q12: Edinburgh A, power". If the line is not in the shape this expects, only the
+// question number is shown, so a name never leaks.
 function lastEventText(match, d, hideNames) {
   const text = d.lastEvent;
   const actor = hideNames ? lastActor(match, d) : null;
   if (!actor) return text;
-  const named = `Q${actor.number}: ${seatName(match, actor.team, actor.seat) || `${match.teams[actor.team].name} seat ${actor.seat + 1}`}, `;
+  const sitter = playerName(match, actor.team, lineupAt(match, actor.index)[actor.team][actor.seat]);
+  const named = `Q${actor.number}: ${sitter || `${match.teams[actor.team].name} seat ${actor.seat + 1}`}, `;
   if (!text.startsWith(named)) return `Q${actor.number}`;
   return `Q${actor.number}: ${teamName(match, actor.team)}, ${text.slice(named.length)}`;
 }

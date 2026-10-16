@@ -17,6 +17,13 @@ const NO_STARTER_TYPES = { on: false, musicNeg: 0, pictureNeg: 0 };
 // (one timeout of up to 30 s, with no game clock under C.2) are from the rulebooks. University
 // Challenge's 26:00 game is from broadcasts (the gong at about 26 minutes), unverified for the trials.
 // Neither Consensus nor GradWrite has a game clock or a timeout limit (checked 16/10/2026).
+//
+// The subs group (v2 4.1): `windows` lists when a swap is allowed, drawn from 'halftime', 'beforeOvertime',
+// 'timeout' (straight after one) and 'quarter', or null when unknown (no warning); `source` is the clause
+// shown in the warning. ACF C.12 (halftime, before overtime), NAQT D.4 (adds after a timeout) and PACE C.13
+// (halftime, or after regulation if and only if the scores are level; never in a timeout) are from the
+// rulebooks. University Challenge has no swap seen on TV, so every swap there warns. Consensus and GradWrite
+// swap between quarters, as both rulebooks have it.
 
 export const PRESETS = [
   {
@@ -34,6 +41,7 @@ export const PRESETS = [
     etLabel: false,
     trivia: null,
     clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: 1, source: 'ACF C.8' },
+    subs: { windows: ['halftime', 'beforeOvertime'], source: 'ACF C.12' },
   },
   {
     presetId: 'acf',
@@ -50,6 +58,7 @@ export const PRESETS = [
     etLabel: false,
     trivia: null,
     clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: 1, source: 'ACF C.8' },
+    subs: { windows: ['halftime', 'beforeOvertime'], source: 'ACF C.12' },
   },
   {
     presetId: 'naqt-college',
@@ -66,6 +75,7 @@ export const PRESETS = [
     etLabel: false,
     trivia: null,
     clock: { countdown: { length: 660, per: 'half' }, timeoutSeconds: 30, timeoutsPerTeam: 1, source: 'NAQT F.9' },
+    subs: { windows: ['halftime', 'timeout', 'beforeOvertime'], source: 'NAQT D.4' },
   },
   {
     // The spec's Source cell for this row reads "As above"; it points at the NAQT college row.
@@ -83,6 +93,7 @@ export const PRESETS = [
     etLabel: false,
     trivia: null,
     clock: { countdown: { length: 600, per: 'half' }, timeoutSeconds: 30, timeoutsPerTeam: 1, source: 'NAQT F.9' },
+    subs: { windows: ['halftime', 'timeout', 'beforeOvertime'], source: 'NAQT D.4' },
   },
   {
     presetId: 'pace',
@@ -99,6 +110,7 @@ export const PRESETS = [
     etLabel: false,
     trivia: null,
     clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: 1, source: 'PACE C.8' },
+    subs: { windows: ['halftime', 'beforeOvertime'], source: 'PACE C.13' },
   },
   {
     presetId: 'uc',
@@ -115,6 +127,7 @@ export const PRESETS = [
     etLabel: false,
     trivia: null,
     clock: { countdown: { length: 1560, per: 'game' }, timeoutSeconds: 30, timeoutsPerTeam: null, source: '' },
+    subs: { windows: [], source: 'not seen on TV' },
   },
   {
     presetId: 'consensus',
@@ -131,6 +144,7 @@ export const PRESETS = [
     etLabel: false,
     trivia: { jackpot: [40, 30, 20, 10], streak: 5, shortJail: 'brick', quarters: 4 },
     clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: null, source: '' },
+    subs: { windows: ['quarter'], source: 'the rulebook' },
   },
   {
     presetId: 'gradwrite',
@@ -147,6 +161,7 @@ export const PRESETS = [
     etLabel: false,
     trivia: { jackpot: [30, 25, 15, 10], streak: null, shortJail: 'noAdvantage', quarters: 4 },
     clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: null, source: '' },
+    subs: { windows: ['quarter'], source: 'the rulebook' },
   },
 ];
 

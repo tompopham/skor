@@ -4,8 +4,12 @@
 // No screen code lives here, so every rule can be tested in Node.
 // Time (v2 3.1) is recorded here and worked out in clock.js: this file only stamps the cycles, keeps the
 // clock's start and stop list and places the timeout markers. engine.js imports clock.js, never the reverse.
+// Substitutions (v2 4) are recorded here (the bench, the swap markers and their refusals) and worked out in
+// lineup.js: who sits where in each question, and which swap windows are open. lineup.js imports derive()
+// from here for swapWindow() alone; neither file calls the other while it loads.
 
 import { clockRunning, defaultClockRules } from './clock.js';
+import { defaultSubsRules, inWindow, lineupAt, lineupsOf, playerName, playersOf, subsRules } from './lineup.js';
 
 const RESULTS = ['power', 'ten', 'neg', 'wrong'];
 const CORRECT = ['power', 'ten'];
@@ -37,7 +41,6 @@ const isTeam = team => team === 0 || team === 1;
 const isSeat = seat => Number.isInteger(seat) && seat >= 0 && seat < 4;
 const isCorrect = buzz => CORRECT.includes(buzz.result);
 const powersOn = rules => rules.tossup.power != null;
-const seatName = (team, seat) => (team.seats[seat] ?? '').trim();
 const answered = cycle => cycle.buzzes.some(isCorrect);
 const controllingTeam = cycle => cycle.buzzes.find(isCorrect).team;
 const buzzCount = (cycle, team) => cycle.buzzes.filter(b => b.team === team).length;
@@ -69,16 +72,22 @@ function copyTeam(team = {}) {
     name: team.name ?? '',
     seats: [0, 1, 2, 3].map(seat => team.seats?.[seat] ?? ''),
     captain: team.captain ?? null,
+    bench: Array.isArray(team.bench) ? [...team.bench] : [],   // v2 4.1: names; a place's id is 'b' and its position
   };
 }
 
-// A copy of the rules with every clock rule present (a preset or a record without them gets the defaults).
-const withClockRules = rules => ({ ...structuredClone(rules), clock: { ...defaultClockRules(), ...structuredClone(rules.clock) } });
+// A copy of the rules with every clock rule and every swap rule present (a preset or a record without
+// them gets the defaults).
+const withDefaultRules = rules => ({
+  ...structuredClone(rules),
+  clock: { ...defaultClockRules(), ...structuredClone(rules.clock) },
+  subs: { ...defaultSubsRules(), ...structuredClone(rules.subs) },
+});
 
 export function newMatch({ rules, teams, details = {}, display = {}, id, now }) {
   return {
     id, createdAt: now, changedAt: now, rev: 0, nextCycleNo: 1,
-    rules: withClockRules(rules),
+    rules: withDefaultRules(rules),
     details: { competition: '', venue: '', round: '', reader: '', scorer: '', ...details },
     teams: [copyTeam(teams?.[0]), copyTeam(teams?.[1])],
     display: { leftTeam: 0, seatOrder: 'asc', ...display },
@@ -142,9 +151,18 @@ function dropOpenCycle(match) {
   for (const marker of match.markers) if (marker.afterCycleId === id) marker.afterCycleId = before;
 }
 
-function checkSeatNamed(match, team, seat) {
-  const t = match.teams[team];
-  if (!seatName(t, seat)) throw new RefusedError('empty-seat', `${t.name} has nobody in seat ${seat + 1}`);
+// Where a cycle stands among the match's (its index), or the number of cycles, the next one's place, when it
+// is not among them. The line-up (v2 4.1) is worked out for that place.
+const slotOf = (match, cycle) => {
+  const index = match.cycles.findIndex(c => c.id === cycle.id);
+  return index < 0 ? match.cycles.length : index;
+};
+
+// Whether somebody sits in a seat in the cycle at `index`: a named starter, or a player swapped in.
+const seatFilled = (match, index, team, seat) => lineupAt(match, index)[team][seat] !== null;
+
+function checkSeatNamed(match, index, team, seat) {
+  if (!seatFilled(match, index, team, seat)) throw new RefusedError('empty-seat', `${match.teams[team].name} has nobody in seat ${seat + 1}`);
 }
 
 // A team with no turn left on the question. Shared by buzzes, lost turns and Streak turns.
@@ -163,7 +181,7 @@ function checkBuzz(match, cycle, { team, seat, result, clue }) {
     throw new RefusedError('bad-action', `a buzz needs team 0 or 1, seat 0 to 3 and a result of ${RESULTS.join(', ')}`);
   }
   const { name } = match.teams[team];
-  checkSeatNamed(match, team, seat);
+  checkSeatNamed(match, slotOf(match, cycle), team, seat);
   if (result === 'power' && !powersOn(match.rules)) throw new RefusedError('powers-off', 'these rules have no powers');
   const format = formatOf(cycle, match.rules);
   if (format === 'streak') throw new RefusedError('use-streak', 'a Streak is scored by turns, not buzzes');
@@ -193,12 +211,12 @@ function checkCarried(match, entry, team, seat) {
   }
 }
 
-// Split seats: for each team one or two of its seats, all named, so a short team can play.
-// Returns them as a sorted copy.
-function checkSplitSeats(match, eligible) {
+// Split seats: for each team one or two of its seats, all filled in the cycle at `index`, so a short team can
+// play. Returns them as a sorted copy.
+function checkSplitSeats(match, eligible, index) {
   const fits = Array.isArray(eligible) && eligible.length === 2 && eligible.every((seats, team) =>
     Array.isArray(seats) && seats.length >= 1 && seats.length <= 2 && new Set(seats).size === seats.length
-    && seats.every(seat => isSeat(seat) && seatName(match.teams[team], seat) !== ''));
+    && seats.every(seat => isSeat(seat) && seatFilled(match, index, team, seat)));
   if (!fits) throw new RefusedError('split-seats', 'a Split needs one or two named seats from each team');
   return eligible.map(seats => [...seats].sort((a, b) => a - b));
 }
@@ -209,7 +227,7 @@ function checkStreakTurn(match, cycle, { team, seat, answers, wrong }) {
   if (!isTeam(team) || !isSeat(seat) || !Number.isInteger(answers) || answers < 0 || typeof wrong !== 'boolean') {
     throw new RefusedError('bad-action', 'a Streak turn needs team 0 or 1, seat 0 to 3, a whole number of answers and wrong true or false');
   }
-  checkSeatNamed(match, team, seat);
+  checkSeatNamed(match, slotOf(match, cycle), team, seat);
   checkTeamTurn(cycle, team, match.teams[team].name, 'streak');
 }
 
@@ -279,7 +297,7 @@ function setFormat(match, { format, eligible }, open, entry, phase, now) {
   if (existing && hasEntry(existing)) {
     throw new RefusedError('question-started', 'the format cannot change once anything is entered on the question');
   }
-  const seats = format === 'split' ? checkSplitSeats(match, eligible) : null;
+  const seats = format === 'split' ? checkSplitSeats(match, eligible, existing ? slotOf(match, existing) : match.cycles.length) : null;
   const cycle = existing ?? startCycle(match, entry, phase, now);
   cycle.format = format;
   cycle.clue = 0;
@@ -528,6 +546,70 @@ function callTimeout(match, { team }, open, _entry, phase, now) {
   match.markers.push({ type: 'timeout', team, afterCycleId: last?.id ?? null, at: now });
 }
 
+// ---- Substitution actions (v2 4) ------------------------------------------------------------
+// A swap is a marker after the last question, so it takes effect from the next one; lineup.js works out who
+// sits where from the markers, so nothing here changes a question already played. Like the clock's actions,
+// these never start the clock or stamp a question, and none changes a score.
+
+// A swap: `player` (an id, 's0' to 's3' or 'b0'...) into `seat`, or null to leave it empty and play short.
+// Whoever had the seat is off. Refused while a question is open, for a player the team does not have, for
+// one already in a seat (the seat they hold included), and, unless `confirmed`, outside the rules' windows
+// (the refusal carries the rules' `source` and `windows`, for the page to say so). Filling an empty seat
+// never needs confirming (a late arrival joins at the next question, ACF C.12.c).
+function sub(match, { team, seat, player, confirmed = false }, open, _entry, phase, now) {
+  if (!isTeam(team) || !isSeat(seat) || typeof confirmed !== 'boolean') {
+    throw new RefusedError('bad-action', 'a swap needs team 0 or 1, seat 0 to 3 and confirmed true or false');
+  }
+  if (open.cycleId !== null) throw new RefusedError('question-open', 'finish the open question first');
+  const { name } = match.teams[team];
+  if (player !== null && !playersOf(match, team).some(p => p.id === player)) {
+    throw new RefusedError('unknown-player', `${name} has no player ${String(player)}`);
+  }
+  const seats = lineupAt(match, match.cycles.length)[team];
+  if (player !== null && seats.includes(player)) {
+    throw new RefusedError('already-seated', `${playerName(match, team, player)} already sits in seat ${seats.indexOf(player) + 1}`);
+  }
+  if (player === null && seats[seat] === null) throw new RefusedError('bad-action', `seat ${seat + 1} is already empty`);
+  if (seats[seat] !== null && !confirmed && !inWindow(match, phase)) {
+    const { windows, source } = subsRules(match);
+    const refusal = new RefusedError('outside-window', `this swap is outside the windows the rules allow (${windows.join(', ') || 'none'}; ${source})`);
+    refusal.source = source;
+    refusal.windows = [...windows];
+    throw refusal;
+  }
+  match.markers.push({ type: 'sub', team, seat, player, afterCycleId: match.cycles.at(-1)?.id ?? null, at: now });
+}
+
+// Add a bench player: the name trimmed and otherwise kept as typed. The new place's id follows the last one's.
+function addBench(match, { team, name }) {
+  if (!isTeam(team) || typeof name !== 'string') throw new RefusedError('bad-action', 'a bench player needs team 0 or 1 and a name');
+  if (name.trim() === '') throw new RefusedError('empty-name', 'a bench player needs a name');
+  const side = match.teams[team];
+  if (!Array.isArray(side.bench)) side.bench = [];
+  side.bench.push(name.trim());
+}
+
+// Delete a swap: `index` into the markers. Every player's questions heard are worked out again from what is left.
+// Refused 'already-seated' when the swaps that would be left put a player in two seats of their team in any question
+// (or the next one): a later swap may have depended on this one, as when a player taken off is brought back into
+// another seat. The later swap has to go first (v2 4.2: a player cannot sit in two seats at once).
+function deleteSub(match, { index }) {
+  const marker = Number.isInteger(index) ? match.markers[index] : undefined;
+  if (marker?.type !== 'sub') throw new RefusedError('not-a-sub', 'that marker is not a swap');
+  const left = { ...match, markers: match.markers.filter((_, place) => place !== index) };
+  for (const lineup of lineupsOf(left)) {
+    for (const team of [0, 1]) {
+      const seats = lineup[team];
+      const twice = seats.findIndex((id, seat) => id !== null && seats.indexOf(id) !== seat);
+      if (twice >= 0) {
+        const first = seats.indexOf(seats[twice]) + 1;
+        throw new RefusedError('already-seated', `deleting this swap would seat ${playerName(match, team, seats[twice])} in seats ${first} and ${twice + 1} at once`);
+      }
+    }
+  }
+  match.markers.splice(index, 1);
+}
+
 // ---- Edit actions (spec 6.4: the cycle editor, and changing a rule mid-match) ---------------
 // Save, Delete, Insert and a note in the cycle editor, and Edit rules. They may be used at any
 // time, after the end of the match too. Later cycles are never removed: anything an edit makes
@@ -566,7 +648,7 @@ function checkedCycle(match, id, given) {
   cycle.format = value('format');
   if (cycle.format !== 'normal') checkFormat(match, cycle.format);
   const format = formatOf(cycle, match.rules);
-  if (format === 'split') cycle.eligible = checkSplitSeats(match, given.eligible);
+  if (format === 'split') cycle.eligible = checkSplitSeats(match, given.eligible, slotOf(match, cycle));
   if (format === 'jackpot') cycle.clue = checkClue(match, value('clue'));
   for (const key of ['dead', 'noBonus']) {
     if (typeof value(key) !== 'boolean') throw bad(`${key} must be true or false`);
@@ -648,7 +730,7 @@ function replaceCycle(match, { cycleId, cycle }) {
 }
 
 // Delete: a marker on the deleted cycle moves to the cycle before, or goes if there is none. A timeout
-// is the exception: it was taken, so it stays, now before the first question.
+// and a swap are the exceptions: they happened, so they stay, now before the first question.
 function deleteCycle(match, { cycleId }) {
   const index = cycleIndex(match, cycleId);
   match.cycles.splice(index, 1);
@@ -656,7 +738,7 @@ function deleteCycle(match, { cycleId }) {
   match.markers = match.markers.flatMap(marker => {
     if (marker.afterCycleId !== cycleId) return [marker];
     if (before !== undefined) return [{ ...marker, afterCycleId: before }];
-    return marker.type === 'timeout' ? [{ ...marker, afterCycleId: null }] : [];
+    return marker.type === 'timeout' || marker.type === 'sub' ? [{ ...marker, afterCycleId: null }] : [];
   });
 }
 
@@ -698,8 +780,9 @@ const STARTER_ACTIONS = { buzz, dead, lostTurn, starterType, format: setFormat, 
 const BONUS_ACTIONS = { part, allGot, noneGot, closeBonus, passRest, bonusTotal, bonusNumber };
 const FLOW_ACTIONS = { halftime, timeCalled, endMatch, endQuarter };
 const CLOCK_ACTIONS = { clock: setClock, timeout: callTimeout };
+const LINEUP_ACTIONS = { sub, addBench, deleteSub };
 const EDIT_ACTIONS = { replaceCycle, deleteCycle, insertCycle, note, setRules };
-const ACTIONS = { ...STARTER_ACTIONS, ...BONUS_ACTIONS, ...FLOW_ACTIONS, ...CLOCK_ACTIONS, ...EDIT_ACTIONS };
+const ACTIONS = { ...STARTER_ACTIONS, ...BONUS_ACTIONS, ...FLOW_ACTIONS, ...CLOCK_ACTIONS, ...LINEUP_ACTIONS, ...EDIT_ACTIONS };
 
 function checkInPlay(type, { open, phase }) {
   const starter = Object.hasOwn(STARTER_ACTIONS, type);
@@ -725,8 +808,8 @@ function noteTime(next, before, now) {
 
 // Returns a new match with the action applied, `rev` raised by 1 and `changedAt` set to `now`.
 // The match passed in is never changed. Throws a RefusedError for an entry that cannot stand.
-// A starter or bonus action (a live entry) first starts the clock if it is not running. Edit actions
-// and the clock's own actions never start it, stop it or stamp a time.
+// A starter or bonus action (a live entry) first starts the clock if it is not running. Edit actions,
+// the clock's own actions and the substitution actions never start it, stop it or stamp a time.
 export function applyAction(match, action, now) {
   const type = action?.type;
   const handler = Object.hasOwn(ACTIONS, type) ? ACTIONS[type] : null;
@@ -737,7 +820,8 @@ export function applyAction(match, action, now) {
   const live = Object.hasOwn(STARTER_ACTIONS, type) || Object.hasOwn(BONUS_ACTIONS, type);
   if (live && !clockRunning(next)) pushClock(next, 'start', now);
   handler(next, action, derived.open, entry, derived.phase, now);
-  if (!Object.hasOwn(EDIT_ACTIONS, type) && !Object.hasOwn(CLOCK_ACTIONS, type)) noteTime(next, derived, now);
+  const untimed = [EDIT_ACTIONS, CLOCK_ACTIONS, LINEUP_ACTIONS].some(group => Object.hasOwn(group, type));
+  if (!untimed) noteTime(next, derived, now);
   next.rev = match.rev + 1;
   next.changedAt = now;
   return next;
@@ -850,7 +934,7 @@ const noJail = () => [[false, false, false, false], [false, false, false, false]
 // - format: the cycle's own; for the next cycle, the one carried on from the last (CARRY_ON);
 // - eligible: a Split's seats (a copy), otherwise null;
 // - jailed: per seat, whether it is in jail (false for empty seats); jailedOut: per team, whether
-//   every named seat is; lockedOut: per team, whether a Double Jump 2nd is closed to it, because
+//   every filled seat is; lockedOut: per team, whether a Double Jump 2nd is closed to it, because
 //   the other team got the 1st just before.
 // A run of jailbreak cycles is one Jailbreak. A correct answerer is jailed from the next cycle on.
 // After each cycle, a team with every named seat jailed breaks jail (all freed, its count up 1)
@@ -859,18 +943,23 @@ const noJail = () => [[false, false, false, false], [false, false, false, false]
 // short team can break in the same cycle as its opponents. Any other format ends the Jailbreak.
 // A quarter marker ends all carrying on: the first cycle of a quarter carries nothing from the
 // one before, so it plays as normal, nobody is jailed and nobody is locked out.
-function cycleEntries(match) {
+// Jail is per seat and the seats are the line-up's (v2 4.2, `lineups` from lineupsOf): a seat whose player
+// changed since the cycle before starts out of jail, and "every named seat" is every seat filled in that cycle.
+function cycleEntries(match, lineups) {
   const { rules } = match;
-  const named = match.teams.map(team => [0, 1, 2, 3].filter(seat => seatName(team, seat) !== ''));
-  const fullyJailed = (jail, t) => named[t].length > 0 && named[t].every(seat => jail[t][seat]);
-  const breakOrder = [0, 1].filter(t => named[t].length === 4).concat([0, 1].filter(t => named[t].length < 4));
   const quarterEnds = new Set(match.markers.filter(m => m.type === 'quarter').map(m => m.afterCycleId));
   let jail = noJail(), breaks = [0, 0], prev = null;
-  return [...match.cycles, null].map(cycle => {
+  return [...match.cycles, null].map((cycle, index) => {
+    const named = lineups[index].map(seats => [0, 1, 2, 3].filter(seat => seats[seat] !== null));
+    const fullyJailed = (jail, t) => named[t].length > 0 && named[t].every(seat => jail[t][seat]);
+    const breakOrder = [0, 1].filter(t => named[t].length === 4).concat([0, 1].filter(t => named[t].length < 4));
     const before = prev && !quarterEnds.has(prev.id) ? prev : null;   // the cycle this one carries on from
     const carried = before ? CARRY_ON[formatOf(before, rules)] ?? 'normal' : 'normal';
     const format = cycle ? formatOf(cycle, rules) : carried;
     if (format !== 'jailbreak' || !before) { jail = noJail(); breaks = [0, 0]; }
+    if (index > 0) {
+      for (const t of [0, 1]) for (const seat of [0, 1, 2, 3]) if (lineups[index][t][seat] !== lineups[index - 1][t][seat]) jail[t][seat] = false;
+    }
     const locker = format === 'doubleJump2' && before && formatOf(before, rules) === 'doubleJump1' && answered(before)
       ? controllingTeam(before) : null;
     const entry = {
@@ -1082,8 +1171,9 @@ function halftimeOf(match, closed, regulationEnd) {
 const ratio = (top, bottom) => (bottom === 0 ? 0 : top / bottom);
 const twoDecimals = number => Math.round(number * 100) / 100;
 
-const blankPlayer = (team, seat) => ({
-  name: seatName(team, seat), seat,
+// One player's row: `id` ties it to a person (lineup.js), `seat` is the starter's own seat or null for the bench.
+const blankPlayer = (id, name, seat) => ({
+  id, name, seat,
   powers: 0, tens: 0, negs: 0, wrongs: 0, interruptsNoPenalty: 0, tossupPoints: 0, heard: 0, pp20: 0,
 });
 
@@ -1123,16 +1213,25 @@ function tallyParts(cycle, rules, own, opponent) {
   }
 }
 
-// Per-player and per-team stats from the record and derive()'s cycles; `scores` are derive()'s.
-function statsOf(match, cycles, scores) {
+// Per-player and per-team stats from the record and derive()'s cycles; `scores` are derive()'s and
+// `lineups` is lineupsOf(match). A team's rows are its four starter seats, named or not, as in version 1
+// (ids 's0' to 's3'), then one for each named bench player ('b0'...), whether or not they sat (v2 4.3). A
+// buzz is tallied to whoever sat in that seat in that cycle, and a question heard to everyone who sat in it.
+function statsOf(match, cycles, scores, lineups) {
   const { rules } = match;
-  const players = match.teams.map(team => [0, 1, 2, 3].map(seat => blankPlayer(team, seat)));
+  const players = match.teams.map((_, t) => [
+    ...[0, 1, 2, 3].map(seat => blankPlayer(`s${seat}`, playerName(match, t, `s${seat}`), seat)),
+    ...playersOf(match, t).filter(p => p.seat === null).map(p => blankPlayer(p.id, p.name, null)),
+  ]);
+  const byId = players.map(rows => new Map(rows.map(row => [row.id, row])));
+  // A seat with nobody in it that still has an entry (a name cleared since) falls back to its starter's row, as in version 1.
+  const rowIn = (t, seat, index) => byId[t].get(lineups[index][t][seat]) ?? byId[t].get(`s${seat}`);
   const teams = scores.map(blankTeamStats);
   match.cycles.forEach((cycle, index) => {
     const derived = cycles[index];
     if (derived.flags.includes('after-end')) return;
-    for (const buzz of derived.buzzes) tallyBuzz(players[buzz.team][buzz.seat], buzz);
-    for (const turn of derived.streak) players[turn.team][turn.seat].tossupPoints += turn.points;
+    for (const buzz of derived.buzzes) tallyBuzz(rowIn(buzz.team, buzz.seat, index), buzz);
+    for (const turn of derived.streak) rowIn(turn.team, turn.seat, index).tossupPoints += turn.points;
     for (const t of [0, 1]) {
       teams[t].tossupPoints += derived.tossupPoints[t];
       teams[t].ownBonus += derived.ownBonus[t];
@@ -1145,7 +1244,7 @@ function statsOf(match, cycles, scores) {
       teams[ctrl].bonusesHeard += 1;
     }
     if (derived.closed) {
-      for (const team of players) for (const player of team) if (player.name !== '') player.heard += 1;
+      for (const t of [0, 1]) for (const id of new Set(lineups[index][t])) { const row = byId[t].get(id); if (row) row.heard += 1; }
     }
   });
   for (const team of players) for (const p of team) p.pp20 = ratio(20 * p.tossupPoints, p.heard);
@@ -1217,8 +1316,6 @@ function quarterOf(match) {
   return Math.min(1 + match.markers.filter(m => m.type === 'quarter').length, trivia.quarters);
 }
 
-const playerName = (match, team, seat) => seatName(match.teams[team], seat) || `${match.teams[team].name} seat ${seat + 1}`;
-
 // What a buzz did, naming the Jackpot clue: "10", or "jackpot clue 2 (30)", or "jackpot clue 2, wrong".
 function buzzWords(buzz, points, format) {
   if (format !== 'jackpot') return RESULT_WORDS[buzz.result];
@@ -1226,19 +1323,21 @@ function buzzWords(buzz, points, format) {
   return isCorrect(buzz) ? `${clue} (${points})` : `${clue}, ${RESULT_WORDS[buzz.result]}`;
 }
 
-// The latest thing that happened, for the room board: "Q12: Smith, power", "Q8: Jones, streak 4 (20)".
-function lastEvent(match, cycles) {
+// The latest thing that happened, for the room board: "Q12: Smith, power", "Q8: Jones, streak 4 (20)". A
+// player is named as the line-up of that question has them (v2 4.1), or by team and seat when nobody sits there.
+function lastEvent(match, cycles, lineups) {
   for (let i = match.cycles.length - 1; i >= 0; i--) {
     const cycle = match.cycles[i], derived = cycles[i], q = `Q${derived.number}`;
+    const who = (team, seat) => playerName(match, team, lineups[i][team][seat]) || `${match.teams[team].name} seat ${seat + 1}`;
     if (cycle.dead) return `${q}: dead`;
     const at = cycle.buzzes.length - 1;
     if (at >= 0) {
       const b = cycle.buzzes[at];
-      return `${q}: ${playerName(match, b.team, b.seat)}, ${buzzWords(b, derived.buzzes[at].points, derived.format)}`;
+      return `${q}: ${who(b.team, b.seat)}, ${buzzWords(b, derived.buzzes[at].points, derived.format)}`;
     }
     const turn = derived.streak.at(-1);
     if (turn) {
-      return `${q}: ${playerName(match, turn.team, turn.seat)}, streak ${turn.answers}${turn.wrong ? ', wrong' : ` (${turn.points})`}`;
+      return `${q}: ${who(turn.team, turn.seat)}, streak ${turn.answers}${turn.wrong ? ', wrong' : ` (${turn.points})`}`;
     }
     const lost = cycle.lostTurn.at(-1);
     if (lost !== undefined) return `${q}: ${match.teams[lost].name} lost its turn`;
@@ -1250,7 +1349,8 @@ function lastEvent(match, cycles) {
 // cycle's when none is open).
 function analyse(match) {
   const { rules } = match;
-  const entries = cycleEntries(match);
+  const lineups = lineupsOf(match);
+  const entries = cycleEntries(match, lineups);
   const scored = match.cycles.map((cycle, index) => scoreCycle(cycle, rules, entries[index]));
   const { closed, overtime, running, endAt, phase, scored: counted, bonusInOvertime } = matchFlow(match, entries, scored);
   const sets = bonusNumbers(match, closed, overtime);
@@ -1280,8 +1380,8 @@ function analyse(match) {
       cycles,
       open: openState(match, openCycle, openCycle ? sets.at(-1) : null, entry, stage),
       phase,
-      stats: statsOf(match, cycles, scores),
-      lastEvent: lastEvent(match, cycles),
+      stats: statsOf(match, cycles, scores, lineups),
+      lastEvent: lastEvent(match, cycles, lineups),
     },
     entry,
   };

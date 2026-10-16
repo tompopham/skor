@@ -7,7 +7,7 @@ import { derive } from './engine.js';
 import { toScoresheetHTML, toCSV, resultLine, fileName, offerFile } from './files.js';
 import { listMatchesReport, loadMatch, getCurrent } from './storage.js';
 import { h } from './dom.js';
-import { ensureStyles } from './view-common.js';
+import { ensureStyles, refusalText } from './view-common.js';
 
 // ---- Style -----------------------------------------------------------------------------------
 // The tables come with the class names the saved file uses (.seat, .notes, .num ...). Two of them
@@ -32,6 +32,7 @@ const CSS = `
 .sheet tr.cycle:hover td { background: #f4f4f4; }
 .sheet tr.after-end td { color: var(--muted); font-style: italic; }
 .sheet tr.marker td { background: var(--btn); font-weight: bold; }
+.sheet tr.swap .swaptext { margin-right: 8px; overflow-wrap: anywhere; }
 .sheet .rowbtn { appearance: none; border: 1px solid var(--line); background: var(--btn); border-radius: 0; min-width: 48px; min-height: 48px; padding: 0 8px; font: inherit; cursor: pointer; }
 .sheet .cycles tr.cycle td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg); }
 .sheet .cycles thead tr:first-child th:first-child { position: sticky; left: 0; z-index: 1; }
@@ -76,6 +77,28 @@ function openableRows(sheet, match, d, api) {
     cell.replaceChildren(h('button', { type: 'button', class: 'rowbtn', 'aria-label': `Open question ${d.cycles[i].number} to edit it` }, cell.textContent));
     row.addEventListener('click', () => api.editCycle(match.cycles[i].id, 'sheet'));
   });
+}
+
+// Gives each swap line of the sheet a Delete (the saved file has the line and no button). Delete asks first,
+// and the swap goes from the record: every player's starters heard are worked out again from what is left.
+function deletableSwaps(sheet, api) {
+  for (const row of sheet.querySelectorAll('tr.swap')) {
+    const index = Number(row.dataset.marker);
+    const line = row.querySelector('.swaptext')?.textContent ?? '';
+    const onDelete = async () => {
+      const choice = await api.ask({
+        title: 'Delete this swap?', body: line,
+        buttons: [{ label: 'Delete', value: 'delete' }, { label: 'Cancel', value: 'cancel' }],
+      });
+      if (choice !== 'delete') return;
+      const result = api.dispatch({ type: 'deleteSub', index }, { fmsg: null });   // a delete that goes through clears an earlier refusal's message
+      if (result.ok) return;
+      // Refused (a later swap depends on this one): nothing is removed, and the reason is said under the buttons at the top, brought into view.
+      api.setUi({ fmsg: { text: refusalText(result.error), bad: true } });
+      document.getElementById('files-msg')?.scrollIntoView?.({ block: 'nearest' });
+    };
+    row.firstElementChild.append(h('button', { type: 'button', class: 'rowbtn noprint', 'aria-label': `Delete the swap: ${line}`, onclick: onDelete }, 'Delete'));
+  }
 }
 
 // What a file action did, said under the buttons. A share sheet the person closed says nothing.
@@ -157,6 +180,7 @@ export function renderSheet(root, state, api) {
   const heading = h('h2', { class: 'sheet-title' }, ...title.childNodes);
   const sheet = h('div', { class: 'sheet', id: 'sheet' }, heading, ...rest);
   openableRows(sheet, match, d, api);
+  deletableSwaps(sheet, api);
 
   // A cycle left after the end of the match is listed and marked, and is in no score or statistic.
   const late = d.cycles.filter(dc => dc.flags.includes('after-end')).map(dc => `Q${dc.number}`);

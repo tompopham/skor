@@ -8,6 +8,7 @@
 
 import { derive } from './engine.js';
 import { defaultClockRules } from './clock.js';
+import { defaultSubsRules } from './lineup.js';
 
 export const KEYS = {
   index: 'scorer.index',
@@ -255,11 +256,19 @@ function fillClockDefaults(match) {
   }
 }
 
+// A record saved before substitutions (v2 4) has no bench and no swap rules, and the line-up code reads them
+// (v2 1.1). They read as the defaults: an empty bench, and no windows listed, so a swap never warns. A bench
+// that is not a list reads as empty. Fields that are there are left alone.
+function fillLineupDefaults(match) {
+  for (const team of match.teams) if (!Array.isArray(team.bench)) team.bench = [];
+  match.rules.subs = { ...defaultSubsRules(), ...(isObject(match.rules.subs) ? match.rules.subs : {}) };
+}
+
 const unreadable = error => ({ ok: false, error });
 
 // Reads a backup file's text, or a saved record: { ok: true, match } or { ok: false, error } with
-// a sentence for the person. Checks the pieces a match cannot do without, fills the trivia and clock
-// fields an older record lacks, then runs derive() once, so a file that is JSON but not a scorer match is
+// a sentence for the person. Checks the pieces a match cannot do without, fills the trivia, clock and
+// substitution fields an older record lacks, then runs derive() once, so a file that is JSON but not a scorer match is
 // refused here and cannot crash a screen later.
 export function parseBackup(text) {
   if (typeof text !== 'string' || text.trim() === '') return unreadable('There is nothing to read: the text is empty, so it is not valid JSON.');
@@ -278,6 +287,7 @@ export function parseBackup(text) {
   if (!Array.isArray(match.cycles) || !match.cycles.every(isObject)) return unreadable('That backup has no list of cycles.');
   match.cycles.forEach(fillTriviaDefaults);
   fillClockDefaults(match);
+  fillLineupDefaults(match);
   try {
     derive(match);
   } catch (error) {

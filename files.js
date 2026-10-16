@@ -6,10 +6,13 @@
 // record itself is never reordered. Stats are shown for people: "–" where there is nothing to
 // divide by, bonus conversion as a percentage, points per 20 and points per bonus to two
 // decimals. Times (v2 3.4) come from clock.js: the scoresheet's time line and each question's "Closed at".
+// Substitutions (v2 4.4) come from lineup.js: a question's buzzes name whoever sat in the seat that question, the
+// player rows are the four starter seats and then the bench, and each swap is a line of its own (swapLines).
 
 import { FORMATS } from './engine.js';
 import { timeSummary, formatLength } from './clock.js';
 import { leftRight, repeatText } from './view-common.js';
+import { lineupAt, lineupsOf, playerName as nameOf } from './lineup.js';
 
 const DASH = '–';
 const TYPE_LABELS = { normal: 'Normal', picture: 'Picture', music: 'Music' };
@@ -31,7 +34,8 @@ const isCorrect = buzz => buzz.result === 'power' || buzz.result === 'ten';
 const afterEnd = dc => dc.flags.includes('after-end');
 const teamName = (match, team) => String(match.teams[team].name ?? '').trim() || `Team ${'AB'[team]}`;
 const seatName = (match, team, seat) => String(match.teams[team].seats[seat] ?? '').trim();
-const playerName = (match, team, seat) => seatName(match, team, seat) || `seat ${seat + 1}`;
+// Whoever sat in `seat` in the cycle with line-up `lineup` (lineupsOf), or "seat N" when nobody did.
+const sitterName = (match, lineup, team, seat) => nameOf(match, team, lineup[team][seat]) || `seat ${seat + 1}`;
 const capitalise = text => text.charAt(0).toUpperCase() + text.slice(1);
 const pad = number => String(number).padStart(2, '0');
 // The day the match was started, as a Date, or null when the record has none: createdAt is missing, null
@@ -60,14 +64,14 @@ function buzzWords(buzz, scored, format) {
 
 const streakWords = turn => `streak ${turn.answers}${turn.wrong ? ', wrong' : ` (${turn.points})`}`;
 
-// One team's part of a cycle for the CSV: its buzzes and Streak turn, and "lost turn".
-function teamEntries(match, cycle, dc, team) {
+// One team's part of a cycle for the CSV: its buzzes and Streak turn, and "lost turn". `lineup` is the cycle's.
+function teamEntries(match, cycle, dc, team, lineup) {
   const entries = [];
   cycle.buzzes.forEach((buzz, i) => {
-    if (buzz.team === team) entries.push(`${playerName(match, team, buzz.seat)} ${buzzWords(buzz, dc.buzzes[i], dc.format)}`);
+    if (buzz.team === team) entries.push(`${sitterName(match, lineup, team, buzz.seat)} ${buzzWords(buzz, dc.buzzes[i], dc.format)}`);
   });
   for (const turn of dc.streak) {
-    if (turn.team === team) entries.push(`${playerName(match, team, turn.seat)} ${streakWords(turn)}`);
+    if (turn.team === team) entries.push(`${sitterName(match, lineup, team, turn.seat)} ${streakWords(turn)}`);
   }
   if (cycle.lostTurn.includes(team)) entries.push('lost turn');
   return entries.join('; ');
@@ -131,9 +135,44 @@ function usedGroups(match, d) {
   return groups;
 }
 
-// Every seat with somebody in it, as [team, seat, stats], the left team's first; an empty seat gets no stats.
+// Every player with a name, as [team, stats], the left team's first: the four starter seats in seat order (an empty
+// seat gets no row) and then each bench player (v2 4.3), as derive() lists them. `stats.seat` is the starter's own
+// seat, or null for the bench.
 const namedPlayers = (match, d) => leftRight(match).flatMap(team =>
-  d.stats.players[team].flatMap((stats, seat) => (seatName(match, team, seat) === '' ? [] : [[team, seat, stats]])));
+  d.stats.players[team].filter(stats => stats.name !== '').map(stats => [team, stats]));
+
+// ---- Swaps (v2 4.4) ---------------------------------------------------------------------------
+
+// Each swap as a line of the sheet, in marker order: { index, marker, team, after, text, what, html }. `index` is the
+// marker's place in match.markers (what deleteSub takes), `after` the number of questions before it (0: "Before
+// Q1"). `text` is the line, "After Q10: Jones in for Smith, seat 3"; `what` is the line without its "After Q10: "
+// (the cycle editor's words); `html` is the line with each name isolated and escaped. Who was in the seat before
+// is found from the line-up with every swap made earlier applied, so a swap reads right whatever came before it.
+// A marker that is not well formed, or whose question is no longer in the record, is left out.
+export function swapLines(match) {
+  const place = new Map(match.cycles.map((cycle, i) => [cycle.id, i + 1]));
+  return match.markers.flatMap((marker, index) => {
+    if (marker.type !== 'sub' || (marker.team !== 0 && marker.team !== 1) || !Number.isInteger(marker.seat) || marker.seat < 0 || marker.seat > 3) return [];
+    const after = (marker.afterCycleId ?? null) === null ? 0 : place.get(marker.afterCycleId);
+    if (after === undefined) return [];
+    const { team, seat } = marker;
+    const player = typeof marker.player === 'string' ? marker.player : null;
+    const offId = lineupAt({ ...match, markers: match.markers.slice(0, index) }, after)[team][seat];
+    const who = id => nameOf(match, team, id) || 'someone';
+    const places = `seat ${seat + 1}`;
+    let pieces;
+    if (player !== null && offId !== null) pieces = [['name', who(player)], ['text', ' in for '], ['name', who(offId)], ['text', `, ${places}`]];
+    else if (player !== null) pieces = [['name', who(player)], ['text', ` in, ${places}`]];
+    else if (offId !== null) pieces = [['name', who(offId)], ['text', ` off, ${places} empty`]];
+    else pieces = [['text', `${places} left empty`]];
+    const prefix = after === 0 ? 'Before Q1: ' : `After Q${after}: `;
+    const join = list => list.map(([, text]) => text).join('');
+    return [{
+      index, marker, team, after, text: prefix + join(pieces), what: join(pieces),
+      html: esc(prefix) + pieces.map(([kind, text]) => (kind === 'name' ? nameHTML(text) : esc(text))).join(''),
+    }];
+  });
+}
 
 // ---- The result line and the file name --------------------------------------------------------
 
@@ -198,7 +237,8 @@ const csvRow = (values, figuresFrom = values.length) =>
 // dash as UTF-8 rather than as Windows-1252.
 const BYTE_ORDER_MARK = '\uFEFF';
 
-// One row per cycle, then a blank line and a row per named player, then a blank line and a row per
+// One row per cycle, then (when there were swaps) a blank line and a row per swap, then a blank line and a row per
+// named player (the starters, then the bench), then a blank line and a row per
 // team, the left team's first throughout. A starter that nobody got says "dead" in the Bonus column. A cycle left after the end of
 // the match is listed with what happened and "after the end of the match, not counted" in its Type,
 // and its points left empty, since they are in no total. The last column, "Closed at", is the clock time
@@ -207,6 +247,7 @@ export function toCSV(match, d) {
   const order = leftRight(match);
   const [a, b] = order.map(team => teamName(match, team));
   const closedAt = timeSummary(match, d).closedAt;
+  const lineups = lineupsOf(match);
   const lines = [csvRow(['Question', 'Type', `${a} buzzes`, `${b} buzzes`, 'Bonus',
     `${a} points`, `${b} points`, `${a} total`, `${b} total`, 'Closed at'])];
   match.cycles.forEach((cycle, i) => {
@@ -215,12 +256,17 @@ export function toCSV(match, d) {
     const type = typeLabel(match, cycle, dc);
     const points = afterEnd(dc) ? ['', ''] : order.map(team => dc.total[team]);
     lines.push(csvRow([dc.number, status.length > 0 ? `${type} (${status.join('; ')})` : type,
-      ...order.map(team => teamEntries(match, cycle, dc, team)),
+      ...order.map(team => teamEntries(match, cycle, dc, team, lineups[i])),
       cycle.dead ? 'dead' : bonusWords(cycle, dc), ...points, ...order.map(team => dc.running[team]), closedText(closedAt[i])]));
   });
+  const swaps = swapLines(match);
+  if (swaps.length > 0) {
+    lines.push('', csvRow(['Swap', 'Team']));
+    for (const swap of swaps) lines.push(csvRow([swap.text, teamName(match, swap.team)]));
+  }
   lines.push('', csvRow(['Player', 'Team', 'Seat', ...PLAYER_COLUMNS.map(c => c.header)]));
-  for (const [team, seat, stats] of namedPlayers(match, d)) {
-    lines.push(csvRow([seatName(match, team, seat), teamName(match, team), seat + 1, ...PLAYER_COLUMNS.map(c => c.value(stats))], 2));
+  for (const [team, stats] of namedPlayers(match, d)) {
+    lines.push(csvRow([stats.name, teamName(match, team), stats.seat === null ? 'Bench' : stats.seat + 1, ...PLAYER_COLUMNS.map(c => c.value(stats))], 2));
   }
   lines.push('', csvRow(['Team', ...TEAM_COLUMNS.map(c => c.header)]));
   for (const team of order) lines.push(csvRow([teamName(match, team), ...TEAM_COLUMNS.map(c => c.value(d.stats.teams[team]))], 1));
@@ -313,6 +359,15 @@ function seatMarks(cycle, dc, team, seat) {
   return marks.join(' / ');
 }
 
+// A seat's cell in a cycle's row: its marks, led by the player's name (isolated, then a colon) when the player
+// who sat there that cycle is not the seat's own starter, so a swap never puts a buzz under the wrong name.
+function seatCellHTML(match, cycle, dc, team, seat, lineup) {
+  const marks = seatMarks(cycle, dc, team, seat);
+  const id = lineup[team][seat];
+  if (marks === '' || typeof id !== 'string' || id === `s${seat}`) return esc(marks);
+  return `${nameHTML(sitterName(match, lineup, team, seat))}: ${esc(marks)}`;
+}
+
 // Where each quarter ends: a row of text to put after the cycle at that index (-1: before the first).
 function quarterRows(match, d) {
   const order = leftRight(match);
@@ -331,6 +386,7 @@ function quarterRows(match, d) {
 function cycleTable(match, d, groups) {
   const { rules } = match;
   const order = leftRight(match);
+  const lineups = lineupsOf(match);
   const closedAt = timeSummary(match, d).closedAt;
   const showType = Boolean(rules.trivia) || rules.starterTypes.on || match.cycles.some(c => c.type !== 'normal');
   const extras = [['bonus', 'Bonus'], ['bounce', 'Bounce'], ['reward', 'Reward']].filter(([group]) => groups.has(group));
@@ -349,8 +405,14 @@ function cycleTable(match, d, groups) {
   ].join('')).join('');
 
   const quarters = quarterRows(match, d);
-  const markerRows = index => (quarters.get(index) ?? [])
-    .map(text => `<tr class="marker"><td colspan="${columns}">${esc(text)}</td></tr>`);
+  // Each swap is a row after the question it follows (-1: before the first), its marker number on the row for the
+  // sheet's Delete. The saved file has the row and no button.
+  const swaps = swapLines(match);
+  const markerRows = index => [
+    ...(quarters.get(index) ?? []).map(text => `<tr class="marker"><td colspan="${columns}">${esc(text)}</td></tr>`),
+    ...swaps.filter(swap => swap.after - 1 === index)
+      .map(swap => `<tr class="marker swap" data-marker="${swap.index}"><td colspan="${columns}"><span class="swaptext">${swap.html}</span></td></tr>`),
+  ];
   const rows = [...markerRows(-1)];
   match.cycles.forEach((cycle, i) => {
     const dc = d.cycles[i];
@@ -363,7 +425,7 @@ function cycleTable(match, d, groups) {
     const teamCells = team => {
       const points = (value, shown) => numCell(counted && shown ? value : '');
       return [
-        ...[0, 1, 2, 3].map(seat => `<td class="seat">${esc(seatMarks(cycle, dc, team, seat))}</td>`),
+        ...[0, 1, 2, 3].map(seat => `<td class="seat">${seatCellHTML(match, cycle, dc, team, seat, lineups[i])}</td>`),
         ...extras.map(([group]) => {
           if (group === 'bonus') return points(dc.ownBonus[team], controller === team);
           if (group === 'bounce') return points(dc.bounce[team], dc.bounce[team] !== 0);
@@ -385,7 +447,7 @@ function cycleTable(match, d, groups) {
 function statsTables(match, d, groups) {
   const shown = columns => columns.filter(c => c.group === undefined || groups.has(c.group));
   const playerColumns = shown(PLAYER_COLUMNS), teamColumns = shown(TEAM_COLUMNS);
-  const players = namedPlayers(match, d).map(([team, seat, stats]) => `<tr><td>${nameHTML(seatName(match, team, seat))}</td>`
+  const players = namedPlayers(match, d).map(([team, stats]) => `<tr><td>${nameHTML(stats.name)}</td>`
     + `<td>${nameHTML(teamName(match, team))}</td>${playerColumns.map(c => numCell(c.value(stats))).join('')}</tr>`);
   const teams = leftRight(match).map(team => `<tr><td>${nameHTML(teamName(match, team))}</td>`
     + `${teamColumns.map(c => numCell(c.value(d.stats.teams[team]))).join('')}</tr>`);

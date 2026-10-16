@@ -1,6 +1,8 @@
 // The Setup screen (spec 6.2): pick a format, check or edit its rules, name the teams and players,
 // then Start. Everything typed lives in a draft kept in state.ui.setup, so changing the format
-// never loses a name, and leaving for Home and coming back finds the form as it was.
+// never loses a name, and leaving for Home and coming back finds the form as it was. Each team has bench
+// boxes under its four seats (two to begin with, and "Add a bench player" for more): the bench names go into
+// the record as team.bench when the match starts (v2 4.1), and an empty box is ignored.
 
 import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset } from './presets.js';
 import { newMatch } from './engine.js';
@@ -26,7 +28,7 @@ function freshDraft() {
   return {
     presetId: DEFAULT_PRESET_ID,
     rules: rulesFromPreset(DEFAULT_PRESET_ID),
-    teams: [0, 1].map(() => ({ name: '', seats: ['', '', '', ''], captain: null })),
+    teams: [0, 1].map(() => ({ name: '', seats: ['', '', '', ''], bench: ['', ''], captain: null })),
     details: { competition: '', venue: '', round: '', reader: '', scorer: '' },
     open: { rules: false, details: false },
   };
@@ -304,8 +306,28 @@ function teamCard(draft, t, rosterId) {
   markCaptain();
   showWarning();
 
+  // The bench: a box for each name in the draft, and a button that adds another. A box is for a name only (no captain).
+  team.bench ??= ['', ''];
+  const benchBox = place => {
+    const input = h('input', {
+      id: `team${t}-bench${place}`, list: rosterId, maxlength: 40, autocomplete: 'off', autocapitalize: 'words', autocorrect: 'off', spellcheck: 'false',
+      placeholder: 'Name', 'aria-label': `${t === 0 ? 'Left' : 'Right'} team, bench player ${place + 1}`,
+    });
+    input.value = team.bench[place] ?? '';
+    input.addEventListener('input', () => { team.bench[place] = input.value; });
+    return h('label', { class: 'f' }, h('span', {}, `Bench player ${place + 1}`), input);
+  };
+  const benchBoxes = team.bench.map((_, place) => benchBox(place));
+  const addBench = h('button', { type: 'button', class: 'btn', id: `team${t}-add-bench` }, 'Add a bench player');
+  addBench.addEventListener('click', () => {
+    team.bench.push('');
+    const box = benchBox(team.bench.length - 1);
+    addBench.before(box);
+    box.querySelector('input').focus();
+  });
+
   return h('div', { class: 'card' }, h('h2', {}, t === 0 ? 'Left team' : 'Right team'),
-    h('label', { class: 'f' }, h('span', {}, 'Team name'), name), seatRows, warning);
+    h('label', { class: 'f' }, h('span', {}, 'Team name'), name), seatRows, benchBoxes, addBench, warning);
 }
 
 function foldedDetails(draft) {
@@ -322,7 +344,8 @@ function foldedDetails(draft) {
 }
 
 // What Start makes of the draft: blank team names become Team A and Team B, and a team with no
-// names typed gets seats A1 to A4 (B1 to B4), as the bare-bones page did.
+// names typed gets seats A1 to A4 (B1 to B4), as the bare-bones page did. The bench is the names typed in its
+// boxes, trimmed, with the empty boxes left out.
 function teamsFromDraft(draft) {
   return draft.teams.map((team, t) => {
     const seats = team.seats.map(name => name.trim());
@@ -330,6 +353,7 @@ function teamsFromDraft(draft) {
     return {
       name: team.name.trim() || `Team ${SIDE[t]}`,
       seats: typed ? seats : [1, 2, 3, 4].map(n => `${SIDE[t]}${n}`),
+      bench: (team.bench ?? []).map(name => name.trim()).filter(Boolean),
       captain: typed && team.captain !== null && seats[team.captain] ? team.captain : null,
     };
   });
@@ -358,7 +382,7 @@ export function renderSetup(root, state, api) {
   // Start: the typed names go to the roster, the draft becomes a match, and the page takes over.
   function startFromDraft() {
     const teams = teamsFromDraft(draft);
-    const typed = draft.teams.flatMap(team => team.seats.map(name => name.trim()).filter(Boolean));
+    const typed = draft.teams.flatMap(team => [...team.seats, ...(team.bench ?? [])].map(name => name.trim()).filter(Boolean));
     saveRoster([...typed, ...loadRoster()]);
     const match = newMatch({
       rules: draft.rules,

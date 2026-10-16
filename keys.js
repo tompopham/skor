@@ -2,7 +2,10 @@
 // build the key event and the key state, act on the Command that comes back, and own everything
 // else: preventDefault, the chosen seat, the dialogs. Nothing here changes a match, and nothing
 // touches the page. Version 1 gives keys to starters and bonuses only: trivia formats, Next clue,
-// Streak turns, Split and End quarter are by tap.
+// Streak turns, Split and End quarter are by tap. Who sits in a seat is the line-up's (v2 4.4), so a seat
+// emptied by a swap has a dead key, and a seat a late arrival has filled has a live one.
+
+import { lineupAt } from './lineup.js';
 
 const STARTER_TYPES = ['normal', 'picture', 'music'];
 const RESULT_KEYS = { p: 'power', c: 'ten', n: 'neg', w: 'wrong' };
@@ -10,7 +13,13 @@ const PART_KEYS = { j: 0, k: 1, l: 2 };
 
 const action = body => ({ action: body });
 const leftTeam = match => (match.display?.leftTeam === 1 ? 1 : 0);
-const hasName = (match, team, seat) => (match.teams[team].seats[seat] ?? '').trim() !== '';
+
+// The line-up the screen is showing: the open question's, or the next one's when none is open (v2 4.4).
+// [team A's four seats, team B's], each a player id or null. The screens name seats from this.
+export function sittingNow(match, d) {
+  return lineupAt(match, match.cycles.length - (d.open.cycleId === null ? 0 : 1));
+}
+const seatFilled = (match, d, team, seat) => sittingNow(match, d)[team][seat] !== null;
 
 // Keys 1 to 4 are the left team's seats in screen order, 5 to 8 the right team's. The screen's
 // order is the display settings': which team is on the left, and whether seats run 1 to 4 or 4 to 1.
@@ -29,7 +38,7 @@ function canAnswer(d, match, { team, seat }) {
   if (open.stage !== 'starter' || open.format === 'streak') return false;
   if (!open.liveTeams[team] || open.jailed?.[team]?.[seat]) return false;
   if (open.format === 'split' && !open.eligible?.[team]?.includes(seat)) return false;
-  return hasName(match, team, seat);
+  return seatFilled(match, d, team, seat);
 }
 
 // P, C, N and W after a seat is chosen. P also needs powers in the rules.
