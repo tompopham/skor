@@ -22,8 +22,9 @@ const NO_STARTER_TYPES = { on: false, musicNeg: 0, pictureNeg: 0 };
 // 'timeout' (straight after one) and 'quarter', or null when unknown (no warning); `source` is the clause
 // shown in the warning. ACF C.12 (halftime, before overtime), NAQT D.4 (adds after a timeout) and PACE C.13
 // (halftime, or after regulation if and only if the scores are level; never in a timeout) are from the
-// rulebooks. University Challenge has no swap seen on TV, so every swap there warns. Consensus and GradWrite
-// swap between quarters, as both rulebooks have it.
+// rulebooks. University Challenge's Eligibility Requirements 10 and 12 (Series 32 and 33) let a reserve replace a
+// player only between matches and for the rest of the series, so every swap there warns (research note of
+// 17/10/2026). Consensus and GradWrite swap between quarters, as both rulebooks have it.
 
 export const PRESETS = [
   {
@@ -127,7 +128,7 @@ export const PRESETS = [
     etLabel: false,
     trivia: null,
     clock: { countdown: { length: 1560, per: 'game' }, timeoutSeconds: 30, timeoutsPerTeam: null, source: '' },
-    subs: { windows: [], source: 'not seen on TV' },
+    subs: { windows: [], source: 'UC eligibility rules 10 and 12: a reserve comes in only between matches, for good' },
   },
   {
     presetId: 'consensus',
