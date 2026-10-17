@@ -6,7 +6,8 @@
 // banner at 0:00 and the timeout box (v2 3.3) are here too: they show what clock.js works out from the
 // record at api.now(), and the one 1 s ticker only repaints their text. Who sits in a seat is the line-up's
 // (v2 4.4; lineup.js): the seat buttons show the player sitting now, the recent list the player who sat in
-// each question, and the menu's Swap players asks for the team, the seat and who comes in.
+// each question, and the menu's Swap players asks for the team, the seat and who comes in. The menu's Protest and Throw
+// out (v2 5) start the dialogs in view-protest.js, which also words the bonus panel's floor and ceiling after a bonus throw-out.
 
 import { derive, applyAction, FORMATS } from './engine.js';
 import { keyToCommand, tapGuard, sittingNow } from './keys.js';
@@ -17,9 +18,10 @@ import { clockRunning, elapsed, countdownState, defaultClockRules, timeoutsUsed,
 import { unlockSound, gong, beep } from './sound.js';
 import { h } from './dom.js';
 import {
-  fmt, MINUS, teamName, leftRight, flagText, repeatText, refusalText, STREAK_MAX, triviaFormats, select, check,
+  fmt, MINUS, teamName, leftRight, flagText, repeatText, refusalText, STREAK_MAX, triviaFormats, select, check, copyText,
 } from './view-common.js';
 import { renderCycleEditor, renderRulesEditor } from './view-editor.js';
+import { protestFlow, throwOutFlow, boundsWords } from './view-protest.js';
 
 // ---- Words and numbers -----------------------------------------------------------------------
 
@@ -121,15 +123,7 @@ function copyLine(text) {
   input.addEventListener('focus', () => input.select());
   const button = h('button', { type: 'button', class: 'btn' }, 'Copy');
   button.addEventListener('click', async () => {
-    let done = false;
-    try {
-      await navigator.clipboard.writeText(text);
-      done = true;
-    } catch {
-      input.focus();
-      try { done = document.execCommand('copy'); } catch { done = false; }
-    }
-    button.textContent = done ? 'Copied' : 'Select the line and copy it';
+    button.textContent = await copyText(text, input) ? 'Copied' : 'Select the line and copy it';
   });
   return h('div', { class: 'copyline' }, input, button);
 }
@@ -420,13 +414,17 @@ function bonusPanel(c) {
   }, text);
   const keyHints = ['J', 'K', 'L'];
 
-  const rows = [h('p', { class: 'bonushead', id: 'bonushead' },
+  // A replacement bonus shows its floor and ceiling (v2 5.2) without a line of its own where there is no room for one: under
+  // next unused in the repeat warning's fixed line, under paired numbering at the front of the head line.
+  const bounds = boundsWords(d.cycles.find(x => x.id === d.open.cycleId)?.replacementBounds);
+  const nextUnused = rules.bonus.numbering === 'nextUnused';
+  const rows = [h('p', { class: 'bonushead', id: 'bonushead' }, nextUnused || !bounds ? '' : `${bounds}. `,
     `${held}Bonus ${bonus.number} for `, h('b', {}, ctrl), bounce ? `. A missed part goes to ${other}.` : '.')];
   // Under next unused a typed number can be one that was already played (v2 2.1): its warning has a
   // line of its own that is always there, empty or not, so no button moves when it appears.
-  if (rules.bonus.numbering === 'nextUnused') {
-    rows.push(h('p', { class: 'hint', id: 'bonus-repeat', style: 'color: var(--bad)' },
-      bonus.repeatOf === null ? '' : repeatText(bonus.number, bonus.repeatOf)));
+  if (nextUnused) {
+    rows.push(h('p', { class: 'hint', id: 'bonus-repeat', style: bonus.repeatOf === null ? null : 'color: var(--bad)' },
+      [bonus.repeatOf === null ? '' : repeatText(bonus.number, bonus.repeatOf), bounds].filter(Boolean).join('. ')));
   }
   if (bounce) {
     rows.push(h('div', { class: 'part head bounce' }, h('span', {}), h('span', { style: 'grid-column: 2 / 4' }, ctrl), h('span', { style: 'grid-column: 4 / 6' }, `→ ${other}`)));
@@ -842,6 +840,7 @@ async function openMenu(c) {
   const keysOn = keysAreOn();
   const namesHidden = loadSettings().hideNames === true;
   const swapReady = d.open.cycleId === null;   // a swap is made between questions (the engine refuses it while one is open)
+  const aim = d.open.cycleId ?? d.cycles.at(-1)?.id ?? null;   // Protest and Throw out act on the open question, else the last
   const [leftTeam, rightTeam] = leftRight(match);
   const buttons = [
     { label: clockRunning(match) ? 'Pause clock' : 'Start clock', value: 'clock', disabled: phase.ended },
@@ -849,6 +848,8 @@ async function openMenu(c) {
     { label: `Timeout: ${teamName(match, rightTeam)}`, value: `timeout${rightTeam}`, disabled: phase.ended },
     { label: 'Halftime (score check)', value: 'halftime', disabled: !halftimeOk },
     { label: swapReady ? 'Swap players' : 'Swap players (between questions only)', value: 'subs', disabled: !swapReady },
+    { label: aim ? 'Protest' : 'Protest (no question yet)', value: 'protest', disabled: !aim },
+    { label: aim ? 'Throw out' : 'Throw out (no question yet)', value: 'throwout', disabled: !aim },
     { label: 'Time called / gong', value: 'time', disabled: phase.ended || phase.regulationOver || timeDone },
     { label: 'Swap sides', value: 'swap' },
     { label: 'Reverse seat order', value: 'reverse' },
@@ -877,6 +878,8 @@ async function openMenu(c) {
     case 'timeout1': return takeTimeout(c, 1);
     case 'halftime': return halftimeFlow(c);
     case 'subs': return swapFlow(c);
+    case 'protest': return protestFlow({ api, match: c.state.match, cycleId: aim });
+    case 'throwout': return throwOutFlow({ api, match: c.state.match, cycleId: aim, patch: { selected: null, streakN: 0 }, say: c.say });
     case 'time': return callTime(c);
     case 'swap': return api.setDisplay({ leftTeam: 1 - leftRight(match)[0] });
     case 'reverse': return api.setDisplay({ seatOrder: match.display?.seatOrder === 'desc' ? 'asc' : 'desc' });

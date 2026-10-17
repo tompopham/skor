@@ -7,6 +7,7 @@ import { derive, applyAction, ruleChangeDiff } from './engine.js';
 import { rulesPanel } from './view-setup.js';
 import { swapLines } from './files.js';
 import { lineupAt, playerName } from './lineup.js';
+import { editorCards } from './view-protest.js';
 import { h } from './dom.js';
 import {
   ensureStyles, fmt, teamName, isCorrect, leftRight, flagText, refusalText, STREAK_MAX, triviaFormats,
@@ -242,12 +243,19 @@ export function renderCycleEditor(root, state, api) {
 
   const note = h('textarea', { rows: 2, maxlength: 500, 'aria-label': 'Note' });
   note.value = draft.note ?? '';
-  note.addEventListener('input', () => { draft.note = note.value; });
+  note.addEventListener('input', () => { draft.note = note.value; cards.sync(); });
+
+  // This cycle's protests and thrown-out questions (v2 5): they act at once on the record, never on the draft, and Save keeps them as
+  // they are, so they are left out of what "changed" means here. The throw-out buttons are greyed while the draft differs from the saved cycle.
+  const stable = value => JSON.stringify(value, (key, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v));
+  const editedPart = ({ protests, thrownOut, openedAt, closedAt, ...rest }) => stable(rest);
+  const cards = editorCards({ api, state, cycleId, sub, isDirty: () => editedPart(draft) !== editedPart(saved) });
 
   // The preview: the engine's answer for this draft, and what it would do to the scores and flags.
   const preview = h('div', { class: 'card', id: 'ed-preview' });
   const saveButton = h('button', { type: 'button', class: 'btn primary', id: 'ed-save' }, 'Save');
   function refresh() {
+    cards.sync();
     const result = previewOf(match, cycleId, draft);
     saveButton.disabled = result.error !== undefined;
     if (result.error) {
@@ -318,6 +326,7 @@ export function renderCycleEditor(root, state, api) {
       h('div', { class: 'card' }, starter),
       bonusCard.length > 0 ? h('div', { class: 'card' }, bonusCard) : null,
       h('div', { class: 'card' }, field('Note', note)),
+      ...cards.nodes,
       preview,
       h('div', { class: 'row' }, saveButton, h('button', { type: 'button', class: 'btn', id: 'ed-cancel', onclick: back }, 'Cancel')),
       h('div', { class: 'row' },

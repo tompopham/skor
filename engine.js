@@ -7,9 +7,13 @@
 // Substitutions (v2 4) are recorded here (the bench, the swap markers and their refusals) and worked out in
 // lineup.js: who sits where in each question, and which swap windows are open. lineup.js imports derive()
 // from here for swapWindow() alone; neither file calls the other while it loads.
+// Protests and thrown-out questions (v2 5) are recorded here (the two lists on each cycle, the actions, the
+// flag and the bonus numbering) and worked out in protests.js, which imports this file for RefusedError, bareSet
+// and cycleIndex, used only inside functions, so the two importing each other is safe in either order.
 
 import { clockRunning, defaultClockRules } from './clock.js';
 import { defaultSubsRules, inWindow, lineupAt, lineupsOf, playerName, playersOf, subsRules } from './lineup.js';
+import { addProtest, keepsRecord, readBonuses, replacementBounds, replacementMissing, setProtestStatus, throwOut } from './protests.js';
 
 const RESULTS = ['power', 'ten', 'neg', 'wrong'];
 const CORRECT = ['power', 'ten'];
@@ -104,6 +108,7 @@ const blankCycle = id => ({
   buzzes: [], lostTurn: [], dead: false, noBonus: false, bonus: null,
   bonusNumberOverride: null, allowAfterTime: null, note: '',
   openedAt: null, closedAt: null,                 // v2 3.1: the times of its first entry and of the entry that closed it
+  protests: [], thrownOut: [],                    // v2 5: the protests made on it, and the questions thrown out of it
 });
 
 // A new cycle id: 'c1', 'c2'..., never reused, even after a delete.
@@ -120,15 +125,15 @@ function addCycle(match) {
 }
 
 // The set a correct answer opens: one unmarked entry per part.
-const bareSet = parts => ({ parts: Array.from({ length: parts }, () => ({ ctrl: null, other: null })), total: null, passedRest: false });
+export const bareSet = parts => ({ parts: Array.from({ length: parts }, () => ({ ctrl: null, other: null })), total: null, passedRest: false });
 
 // ---- Actions -------------------------------------------------------------------------------
 // Each handler changes its own copy of the match, or throws a RefusedError. `open` and `phase` are
 // derive()'s open state and phase for the match before the action, and `entry` the open cycle's
 // starting state from cycleEntries() (the next cycle's when none is open); a starter action with
 // no cycle open adds one. `now` is the time of the action (v2 3.1), a sixth argument only the handlers
-// that stamp a time use. A refusal may come after the handler has changed its copy: the copy is then
-// thrown away.
+// that stamp a time use, and a seventh is derive()'s result before the action (the throw-out's). A refusal
+// may come after the handler has changed its copy: the copy is then thrown away.
 
 const openCycleOf = (match, open) => match.cycles.find(c => c.id === open.cycleId) ?? null;
 
@@ -144,8 +149,10 @@ function startCycle(match, entry, phase, now) {
 }
 
 // Removes the open cycle, which has nothing entered against it. A marker on it moves to the cycle
-// before (or to before the first cycle), as markers move with their cycles (spec 4).
+// before (or to before the first cycle), as markers move with their cycles (spec 4). A cycle with a protest or
+// a thrown-out question stays (v2 5.2), so the marker the caller adds goes after it.
 function dropOpenCycle(match) {
+  if (keepsRecord(match.cycles.at(-1))) return;
   const { id } = match.cycles.pop();
   const before = match.cycles.at(-1)?.id ?? null;
   for (const marker of match.markers) if (marker.afterCycleId === id) marker.afterCycleId = before;
@@ -617,7 +624,7 @@ function deleteSub(match, { index }) {
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-function cycleIndex(match, cycleId) {
+export function cycleIndex(match, cycleId) {
   const index = match.cycles.findIndex(c => c.id === cycleId);
   if (index < 0) throw new RefusedError('no-such-cycle', `there is no cycle ${cycleId}`);
   return index;
@@ -721,12 +728,12 @@ function checkedBonus(match, cycle, given) {
   return set;
 }
 
-// Save in the cycle editor: the cycle is replaced, keeping its id, its place and its times (v2 3.1): the
-// replacement's own openedAt and closedAt are ignored.
+// Save in the cycle editor: the cycle is replaced, keeping its id, its place, its times (v2 3.1) and its protests
+// and thrown-out questions (v2 5): the replacement's own openedAt, closedAt, protests and thrownOut are ignored.
 function replaceCycle(match, { cycleId, cycle }) {
   const index = cycleIndex(match, cycleId);
-  const { openedAt = null, closedAt = null } = match.cycles[index];
-  match.cycles[index] = { ...checkedCycle(match, cycleId, cycle), openedAt, closedAt };
+  const { openedAt = null, closedAt = null, protests = [], thrownOut = [] } = match.cycles[index];
+  match.cycles[index] = { ...checkedCycle(match, cycleId, cycle), openedAt, closedAt, protests, thrownOut };
 }
 
 // Delete: a marker on the deleted cycle moves to the cycle before, or goes if there is none. A timeout
@@ -781,8 +788,9 @@ const BONUS_ACTIONS = { part, allGot, noneGot, closeBonus, passRest, bonusTotal,
 const FLOW_ACTIONS = { halftime, timeCalled, endMatch, endQuarter };
 const CLOCK_ACTIONS = { clock: setClock, timeout: callTimeout };
 const LINEUP_ACTIONS = { sub, addBench, deleteSub };
+const PROTEST_ACTIONS = { protest: addProtest, protestStatus: setProtestStatus, throwOut };   // v2 5, untimed like the edits
 const EDIT_ACTIONS = { replaceCycle, deleteCycle, insertCycle, note, setRules };
-const ACTIONS = { ...STARTER_ACTIONS, ...BONUS_ACTIONS, ...FLOW_ACTIONS, ...CLOCK_ACTIONS, ...LINEUP_ACTIONS, ...EDIT_ACTIONS };
+const ACTIONS = { ...STARTER_ACTIONS, ...BONUS_ACTIONS, ...FLOW_ACTIONS, ...CLOCK_ACTIONS, ...LINEUP_ACTIONS, ...PROTEST_ACTIONS, ...EDIT_ACTIONS };
 
 function checkInPlay(type, { open, phase }) {
   const starter = Object.hasOwn(STARTER_ACTIONS, type);
@@ -809,7 +817,8 @@ function noteTime(next, before, now) {
 // Returns a new match with the action applied, `rev` raised by 1 and `changedAt` set to `now`.
 // The match passed in is never changed. Throws a RefusedError for an entry that cannot stand.
 // A starter or bonus action (a live entry) first starts the clock if it is not running. Edit actions,
-// the clock's own actions and the substitution actions never start it, stop it or stamp a time.
+// the clock's own actions, the substitution actions and the protest and throw-out actions never start it, stop it or
+// stamp a time (a cycle a throw-out reopens takes the later close when the replacement closes it: see noteTime).
 export function applyAction(match, action, now) {
   const type = action?.type;
   const handler = Object.hasOwn(ACTIONS, type) ? ACTIONS[type] : null;
@@ -819,8 +828,8 @@ export function applyAction(match, action, now) {
   const next = structuredClone(match);
   const live = Object.hasOwn(STARTER_ACTIONS, type) || Object.hasOwn(BONUS_ACTIONS, type);
   if (live && !clockRunning(next)) pushClock(next, 'start', now);
-  handler(next, action, derived.open, entry, derived.phase, now);
-  const untimed = [EDIT_ACTIONS, CLOCK_ACTIONS, LINEUP_ACTIONS].some(group => Object.hasOwn(group, type));
+  handler(next, action, derived.open, entry, derived.phase, now, derived);
+  const untimed = [EDIT_ACTIONS, CLOCK_ACTIONS, LINEUP_ACTIONS, PROTEST_ACTIONS].some(group => Object.hasOwn(group, type));
   if (!untimed) noteTime(next, derived, now);
   next.rev = match.rev + 1;
   next.changedAt = now;
@@ -898,7 +907,9 @@ function bonusPoints(cycle, rules) {
 //   picture or music starter plays its own set and leaves the queue alone. The starter type is
 //   read from the record each time, so changing it during a bonus moves the set.
 // A hand override changes only the number shown on its own cycle (under next unused it also uses
-// that number up). `closed` and `overtime` are per cycle.
+// that number up). A tossup thrown out after its bonus was read keeps that set's number used (v2 5.2), the typed
+// one if it had one, else the lowest unused; a bonus thrown out uses up nothing, its replacement keeping the
+// cycle's number. `closed` and `overtime` are per cycle.
 function bonusNumbers(match, closed, overtime) {
   const { rules } = match;
   const paired = rules.bonus.numbering === 'paired';
@@ -907,6 +918,12 @@ function bonusNumbers(match, closed, overtime) {
   const played = new Map();                       // next unused: each number played so far, and the question that first played it
   const lowestUnused = () => { let number = 1; while (played.has(number)) number += 1; return number; };
   return match.cycles.map((cycle, index) => {
+    if (!paired && !overtime[index]) {                // v2 5.2: a set read before its tossup was thrown out stays used
+      for (const read of readBonuses(cycle)) {
+        const number = read.bonusNumberOverride ?? lowestUnused();
+        if (!played.has(number)) played.set(number, index + 1);
+      }
+    }
     if (!playsBonus(cycle) || overtime[index]) {
       const dead = !answered(cycle) && closed[index];
       if (heldSets && dead && cycle.type !== 'normal') queue.push({ number: index + 1, kind: cycle.type });
@@ -1355,20 +1372,21 @@ function analyse(match) {
   const { closed, overtime, running, endAt, phase, scored: counted, bonusInOvertime } = matchFlow(match, entries, scored);
   const sets = bonusNumbers(match, closed, overtime);
   const afterEnd = index => endAt !== null && index >= endAt;
+  // Only the last cycle can be open; every earlier one is history. None is open once the match
+  // has ended or waits to be ended.
+  const awaitingEnd = phase.regulationOver && phase.overtime === null;
+  const last = match.cycles.at(-1);
+  const openCycle = !phase.ended && !awaitingEnd && last && !closed.at(-1) ? last : null;
   const cycles = match.cycles.map((cycle, index) => ({
     id: cycle.id, number: index + 1, overtime: overtime[index],
     bonusNumber: sets[index]?.number ?? null, heldKind: sets[index]?.heldKind ?? null,
     bonusRepeatOf: sets[index]?.repeatOf ?? null,
     ...counted[index],
     running: running[index], closed: closed[index],
+    replacementBounds: replacementBounds(cycle, rules),
     flags: [...cycleFlags(cycle, entries[index]), ...(bonusInOvertime[index] ? ['bonus-in-overtime'] : []),
-      ...(afterEnd(index) ? ['after-end'] : [])],
+      ...(afterEnd(index) ? ['after-end'] : []), ...(replacementMissing(cycle, closed[index], cycle === openCycle) ? ['replacement-missing'] : [])],
   }));
-  // Only the last cycle can be open; every earlier one is history. None is open once the match
-  // has ended or waits to be ended.
-  const awaitingEnd = phase.regulationOver && phase.overtime === null;
-  const last = match.cycles.at(-1);
-  const openCycle = !phase.ended && !awaitingEnd && last && !closed.at(-1) ? last : null;
   let stage = openCycle && answered(openCycle) ? 'bonus' : 'starter';
   if (awaitingEnd) stage = 'awaitingEnd';
   if (phase.ended) stage = 'ended';

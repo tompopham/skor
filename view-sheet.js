@@ -8,6 +8,7 @@ import { toScoresheetHTML, toCSV, resultLine, fileName, offerFile } from './file
 import { listMatchesReport, loadMatch, getCurrent } from './storage.js';
 import { h } from './dom.js';
 import { ensureStyles, refusalText } from './view-common.js';
+import { protestControls } from './view-protest.js';
 
 // ---- Style -----------------------------------------------------------------------------------
 // The tables come with the class names the saved file uses (.seat, .notes, .num ...). Two of them
@@ -33,6 +34,10 @@ const CSS = `
 .sheet tr.after-end td { color: var(--muted); font-style: italic; }
 .sheet tr.marker td { background: var(--btn); font-weight: bold; }
 .sheet tr.swap .swaptext { margin-right: 8px; overflow-wrap: anywhere; }
+.sheet tr.thrown td { display: table-cell; white-space: normal; color: var(--muted); text-decoration: line-through; }
+.sheet tr.thrown .tw { display: block; position: sticky; left: 0; max-width: min(100%, calc(100vw - 56px)); overflow-wrap: anywhere; text-decoration: line-through; }
+.sheet section.protests { display: grid; gap: 8px; }
+.sheet .protest { overflow-wrap: anywhere; }
 .sheet .rowbtn { appearance: none; border: 1px solid var(--line); background: var(--btn); border-radius: 0; min-width: 48px; min-height: 48px; padding: 0 8px; font: inherit; cursor: pointer; }
 .sheet .cycles tr.cycle td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg); }
 .sheet .cycles thead tr:first-child th:first-child { position: sticky; left: 0; z-index: 1; }
@@ -98,6 +103,20 @@ function deletableSwaps(sheet, api) {
       document.getElementById('files-msg')?.scrollIntoView?.({ block: 'nearest' });
     };
     row.firstElementChild.append(h('button', { type: 'button', class: 'rowbtn noprint', 'aria-label': `Delete the swap: ${line}`, onclick: onDelete }, 'Delete'));
+  }
+}
+
+// Gives each protest line of the sheet its status select and Copy for Discord (the saved file has the line and no controls). A
+// refusal is said under the buttons at the top, brought into view, as a swap's Delete does.
+function controlledProtests(sheet, state, api, d) {
+  for (const row of sheet.querySelectorAll('.protest')) {
+    row.append(protestControls({
+      api, getMatch: () => state.match, d, cycleId: row.dataset.cycle, index: Number(row.dataset.index), patch: { fmsg: null },
+      onRefused: text => {
+        api.setUi({ fmsg: { text, bad: true } });
+        document.getElementById('files-msg')?.scrollIntoView?.({ block: 'nearest' });
+      },
+    }));
   }
 }
 
@@ -181,6 +200,7 @@ export function renderSheet(root, state, api) {
   const sheet = h('div', { class: 'sheet', id: 'sheet' }, heading, ...rest);
   openableRows(sheet, match, d, api);
   deletableSwaps(sheet, api);
+  controlledProtests(sheet, state, api, d);
 
   // A cycle left after the end of the match is listed and marked, and is in no score or statistic.
   const late = d.cycles.filter(dc => dc.flags.includes('after-end')).map(dc => `Q${dc.number}`);

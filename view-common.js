@@ -22,6 +22,7 @@ const FLAG_TEXT = {
   'double-jump-locked': 'a team locked out of this Double Jump is entered',
   'not-on-this-set': 'a player who is not on this Split set is entered',
   'bonus-in-overtime': 'bonus in overtime',
+  'replacement-missing': 'replacement not entered',
 };
 export const flagText = flag => FLAG_TEXT[flag] ?? flag;
 // The warning for a typed bonus number that was already played (v2 2.1): `question` is the Q number that first played it.
@@ -64,6 +65,24 @@ export function numberBox(value, onChange, attrs = {}) {
   input.value = value ?? '';
   input.addEventListener('change', () => onChange(input.value.trim() === '' ? null : Number(input.value)));
   return input;
+}
+
+// ---- The clipboard ---------------------------------------------------------------------------
+
+// Puts `text` on the clipboard. Where the browser will not take it, `box` (a text box showing the same text) is brought
+// into view, selected and copied the old way, which still works where the clipboard is shut. Resolves whether it worked;
+// when it did not, the box is left showing and selected, for the person to copy by hand.
+export async function copyText(text, box = null) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    if (!box) return false;
+    box.hidden = false;
+    box.focus();
+    box.select?.();
+    try { return document.execCommand('copy'); } catch { return false; }
+  }
 }
 
 // ---- Style -----------------------------------------------------------------------------------

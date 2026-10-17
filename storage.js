@@ -264,11 +264,20 @@ function fillLineupDefaults(match) {
   match.rules.subs = { ...defaultSubsRules(), ...(isObject(match.rules.subs) ? match.rules.subs : {}) };
 }
 
+// A record saved before protests and thrown-out questions (v2 5) has neither list on its cycles. They read as empty
+// (a list that is not a list too). Lists that are there are left alone.
+function fillProtestDefaults(match) {
+  for (const cycle of match.cycles) {
+    if (!Array.isArray(cycle.protests)) cycle.protests = [];
+    if (!Array.isArray(cycle.thrownOut)) cycle.thrownOut = [];
+  }
+}
+
 const unreadable = error => ({ ok: false, error });
 
 // Reads a backup file's text, or a saved record: { ok: true, match } or { ok: false, error } with
-// a sentence for the person. Checks the pieces a match cannot do without, fills the trivia, clock and
-// substitution fields an older record lacks, then runs derive() once, so a file that is JSON but not a scorer match is
+// a sentence for the person. Checks the pieces a match cannot do without, fills the trivia, clock,
+// substitution and protest fields an older record lacks, then runs derive() once, so a file that is JSON but not a scorer match is
 // refused here and cannot crash a screen later.
 export function parseBackup(text) {
   if (typeof text !== 'string' || text.trim() === '') return unreadable('There is nothing to read: the text is empty, so it is not valid JSON.');
@@ -288,6 +297,7 @@ export function parseBackup(text) {
   match.cycles.forEach(fillTriviaDefaults);
   fillClockDefaults(match);
   fillLineupDefaults(match);
+  fillProtestDefaults(match);
   try {
     derive(match);
   } catch (error) {

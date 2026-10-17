@@ -8,11 +8,15 @@
 // decimals. Times (v2 3.4) come from clock.js: the scoresheet's time line and each question's "Closed at".
 // Substitutions (v2 4.4) come from lineup.js: a question's buzzes name whoever sat in the seat that question, the
 // player rows are the four starter seats and then the bench, and each swap is a line of its own (swapLines).
+// Protests and thrown-out questions (v2 5) come from view-protest.js: a thrown-out entry is a struck-through line under its
+// question, the protests are a section after the question table, and the CSV has a block of each; a cycle's row is marked.
 
 import { FORMATS } from './engine.js';
 import { timeSummary, formatLength } from './clock.js';
 import { leftRight, repeatText } from './view-common.js';
 import { lineupAt, lineupsOf, playerName as nameOf } from './lineup.js';
+import { STATUS_WORDS } from './protests.js';
+import { allProtests, protestPieces, questionWords, thrownOutLines } from './view-protest.js';
 
 const DASH = '–';
 const TYPE_LABELS = { normal: 'Normal', picture: 'Picture', music: 'Music' };
@@ -28,6 +32,7 @@ const FLAG_WORDS = {
   jailed: 'check: a player in jail is entered',
   'double-jump-locked': 'check: a team locked out of this Double Jump is entered',
   'not-on-this-set': 'check: a player not on this Split set is entered',
+  'replacement-missing': 'replacement not entered',
 };
 
 const isCorrect = buzz => buzz.result === 'power' || buzz.result === 'ten';
@@ -89,8 +94,9 @@ function bonusWords(cycle, dc) {
   return `#${dc.bonusNumber}${held}: ${bonus.total != null ? `total ${bonus.total}` : parts.join(', ')}`;
 }
 
-// What marks a cycle out: overtime, and the flags derive() raised.
-const statusWords = dc => [...(dc.overtime ? ['overtime'] : []), ...dc.flags.map(flag => FLAG_WORDS[flag] ?? flag)];
+// What marks a cycle out: overtime, the flags derive() raised, and whether it has a protest or a thrown-out question (v2 5).
+const statusWords = (dc, cycle) => [...(dc.overtime ? ['overtime'] : []), ...dc.flags.map(flag => FLAG_WORDS[flag] ?? flag),
+  ...((cycle.protests?.length ?? 0) > 0 ? ['protest'] : []), ...((cycle.thrownOut?.length ?? 0) > 0 ? ['thrown out'] : [])];
 
 // ---- Stats columns, shared by the CSV and the scoresheet --------------------------------------
 // `group` names the rules a column belongs to: the scoresheet leaves a group out when the rules do
@@ -237,8 +243,9 @@ const csvRow = (values, figuresFrom = values.length) =>
 // dash as UTF-8 rather than as Windows-1252.
 const BYTE_ORDER_MARK = '\uFEFF';
 
-// One row per cycle, then (when there were swaps) a blank line and a row per swap, then a blank line and a row per
-// named player (the starters, then the bench), then a blank line and a row per
+// One row per cycle, then (when there were swaps) a blank line and a row per swap, then (when questions were thrown out) a blank
+// line and a row per thrown-out entry ("Q3", "Thrown out: ..."), then (when there were protests) a blank line, a header row and a
+// row per protest, then a blank line and a row per named player (the starters, then the bench), then a blank line and a row per
 // team, the left team's first throughout. A starter that nobody got says "dead" in the Bonus column. A cycle left after the end of
 // the match is listed with what happened and "after the end of the match, not counted" in its Type,
 // and its points left empty, since they are in no total. The last column, "Closed at", is the clock time
@@ -252,7 +259,7 @@ export function toCSV(match, d) {
     `${a} points`, `${b} points`, `${a} total`, `${b} total`, 'Closed at'])];
   match.cycles.forEach((cycle, i) => {
     const dc = d.cycles[i];
-    const status = statusWords(dc);
+    const status = statusWords(dc, cycle);
     const type = typeLabel(match, cycle, dc);
     const points = afterEnd(dc) ? ['', ''] : order.map(team => dc.total[team]);
     lines.push(csvRow([dc.number, status.length > 0 ? `${type} (${status.join('; ')})` : type,
@@ -263,6 +270,19 @@ export function toCSV(match, d) {
   if (swaps.length > 0) {
     lines.push('', csvRow(['Swap', 'Team']));
     for (const swap of swaps) lines.push(csvRow([swap.text, teamName(match, swap.team)]));
+  }
+  const thrown = thrownOutLines(match, d);
+  if (thrown.length > 0) {
+    lines.push('');
+    for (const line of thrown) lines.push(csvRow([`Q${line.number}`, line.text]));
+  }
+  const protests = allProtests(match);
+  if (protests.length > 0) {
+    lines.push('', csvRow(['Protest on', 'Team', 'Player', 'Points at stake', 'Status', 'Text']));
+    for (const { cycleId, protest } of protests) {
+      lines.push(csvRow([questionWords(d.cycles.find(c => c.id === cycleId), protest.part), teamName(match, protest.team), nameOf(match, protest.team, protest.player),
+        protest.points, STATUS_WORDS[protest.status] ?? protest.status, protest.text ?? '']));
+    }
   }
   lines.push('', csvRow(['Player', 'Team', 'Seat', ...PLAYER_COLUMNS.map(c => c.header)]));
   for (const [team, stats] of namedPlayers(match, d)) {
@@ -299,6 +319,8 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ESCAPES[ch]);
 // A team or player name on the page: escaped, and isolated from the text round it (<bdi>), so a name
 // in a right-to-left script cannot pull the score beside it to the wrong side of it.
 const nameHTML = value => `<bdi>${esc(value)}</bdi>`;
+// A line made of pieces (view-protest.js): the names and typed words isolated and escaped, the rest escaped.
+const piecesHTML = pieces => pieces.map(([kind, text]) => (kind === 'name' ? nameHTML(text) : esc(text))).join('');
 
 // Plain, black on white, no colour: it is printed. A4 landscape, a row never split across pages, the
 // column headings repeated on each page, and the stats on a page of their own when printed.
@@ -324,6 +346,8 @@ tr { break-inside: avoid; page-break-inside: avoid; }
 thead { display: table-header-group; }
 tr.after-end td { color: #444; font-style: italic; }
 tr.marker td { background: #e6e6e6; font-weight: bold; }
+tr.thrown td { color: #444; text-decoration: line-through; }
+.protest { margin: 1mm 0; }
 @media print {
   body { padding: 0; }
   .wide { overflow: visible; }
@@ -404,6 +428,7 @@ function cycleTable(match, d, groups) {
     '<th class="num">Total</th>', '<th class="num">Running</th>',
   ].join('')).join('');
 
+  const thrown = thrownOutLines(match, d);
   const quarters = quarterRows(match, d);
   // Each swap is a row after the question it follows (-1: before the first), its marker number on the row for the
   // sheet's Delete. The saved file has the row and no button.
@@ -420,7 +445,7 @@ function cycleTable(match, d, groups) {
     const controller = dc.bonusNumber === null ? null : cycle.buzzes.find(isCorrect)?.team;
     const notes = [cycle.dead ? 'Dead' : null,
       ...cycle.lostTurn.map(team => `${nameHTML(teamName(match, team))} lost its turn`),
-      ...[...statusWords(dc).map(capitalise), dc.bonusRepeatOf === null ? '' : repeatText(dc.bonusNumber, dc.bonusRepeatOf),
+      ...[...statusWords(dc, cycle).map(capitalise), dc.bonusRepeatOf === null ? '' : repeatText(dc.bonusNumber, dc.bonusRepeatOf),
         String(cycle.note ?? '').trim()].filter(Boolean).map(esc)].filter(Boolean);
     const teamCells = team => {
       const points = (value, shown) => numCell(counted && shown ? value : '');
@@ -438,6 +463,9 @@ function cycleTable(match, d, groups) {
       + (showType ? `<td>${esc(typeLabel(match, cycle, dc))}</td>` : '')
       + (groups.has('bonus') ? `<td class="set">${esc(bonusWords(cycle, dc))}</td>` : '')
       + order.map(teamCells).join('') + timeCell(closedText(closedAt[i])) + `<td class="notes">${notes.join('<br>')}</td></tr>`);
+    // Each thrown-out entry is a struck-through line under its question, a row of its own.
+    rows.push(...thrown.filter(line => line.cycleId === cycle.id)
+      .map(line => `<tr class="thrown"><td colspan="${columns}"><span class="tw">${piecesHTML(line.pieces)}</span></td></tr>`));
     rows.push(...markerRows(i));
   });
   const body = rows.length > 0 ? rows.join('\n') : `<tr><td colspan="${columns}">No questions yet.</td></tr>`;
@@ -468,6 +496,14 @@ ${teams.join('\n')}
 </section>`;
 }
 
+// The Protests section (v2 5.1) after the question table: every protest in question order, one line each, and nothing when there
+// are none. The scoresheet screen gives each line its status select and Copy for Discord; the file has the lines alone.
+function protestsSection(match, d) {
+  const lines = allProtests(match).map(({ cycleId, index }) =>
+    `<div class="protest" data-cycle="${esc(cycleId)}" data-index="${index}">${piecesHTML(protestPieces(match, d, cycleId, index))}</div>`);
+  return lines.length === 0 ? '' : `<section class="protests">\n<h2>Protests</h2>\n${lines.join('\n')}\n</section>\n`;
+}
+
 // The whole scoresheet as one standalone page: no script, no outside file, so it prints or sends as
 // it is. Everything from the match record goes through esc().
 export function toScoresheetHTML(match, d) {
@@ -487,7 +523,7 @@ export function toScoresheetHTML(match, d) {
 ${timeLineHTML(match, d)}
 ${cycleTable(match, d, groups)}
 <p class="key">Each player's cell shows the points from the buzz: P is a power, N a wrong interruption, W a wrong answer after the question ended, S a Streak turn.</p>
-${statsTables(match, d, groups)}
+${protestsSection(match, d)}${statsTables(match, d, groups)}
 <p class="foot">Unofficial scoresheet from Skor.</p>
 </body>
 </html>
