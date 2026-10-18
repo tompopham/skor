@@ -255,11 +255,16 @@ export function rulesPanel(rules) {
 
 // ---- The screen ----------------------------------------------------------------------------
 
+// A preset is tagged "Unverified" when it has no primary source or its source says a rule is unverified.
+export function presetUnverified(preset) {
+  return preset.verified === false || /unverified/i.test(preset.source);
+}
+
 function presetList(draft, onPick) {
   const rows = new Map();
   const list = h('fieldset', { class: 'presets' }, h('legend', {}, 'Format'));
   for (const preset of PRESETS) {
-    const unverified = preset.verified === false || /unverified/i.test(preset.source);
+    const unverified = presetUnverified(preset);
     const input = h('input', { type: 'radio', name: 'preset', value: preset.presetId });
     input.checked = preset.presetId === draft.presetId;
     input.addEventListener('change', () => { if (input.checked) onPick(preset.presetId); });

@@ -116,7 +116,7 @@ export const PRESETS = [
   {
     presetId: 'uc',
     name: 'University Challenge',
-    source: '107 BBC episodes, Jul 2023 to Aug 2026 (research 3.2) for the neg rule, music and picture, 3 x 5, held sets, the gong and the tiebreak. *No power, no bounce-backs and paired numbering rest on secondary pages: unverified',
+    source: 'BBC episodes, Jul 2023 to Aug 2026 (research 3.2): the neg rule, music and picture, 3 x 5, held sets, the gong and the tiebreak. No power and no bounce-backs: every score change in 108 games was +10, -5 or +5 to the starter team, and every final score fits (score check, 18/10/2026). Paired numbering is Skor\'s own scoresheet choice, not a UC rule',
     verified: true,
     tossup: { ten: 10, power: null, neg: -5, secondNeg: 0 },
     starterTypes: { on: true, musicNeg: 0, pictureNeg: 0 },
