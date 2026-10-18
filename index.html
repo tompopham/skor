@@ -91,6 +91,12 @@ td.n, th.n { text-align: right; }
 .card .msg:empty { display: none; }
 .resume-line { overflow-wrap: anywhere; }
 .notes { display: grid; gap: 8px; margin-top: 16px; max-width: 480px; }
+/* The words on Home that search engines read without running app.js (18/10/2026). The heading, the tagline and
+   the about line are written into #app below, and app.js draws Home with the same words in the same places, so
+   nothing moves when it takes over. A page opened at #board (the room board) keeps them hidden until the board
+   is drawn: the script at the end of this head marks such a page, and app.js sets data-screen on #app when it draws. */
+.about { margin: 0 0 8px; max-width: 480px; }
+html[data-start="board"] #app:not([data-screen]) { visibility: hidden; }
 
 /* Setup */
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
@@ -276,10 +282,14 @@ button.clockslot { background: var(--btn); }
   .sheetview .sheet .stats { break-before: page; page-break-before: always; }
 }
 </style>
+<script>if (location.hash === '#board') document.documentElement.dataset.start = 'board';</script>
 </head>
 <body>
 <div id="status" class="shell" role="status" aria-live="polite"></div>
-<main id="app" class="shell"></main>
+<main id="app" class="shell">
+<div class="top"><div><h1 tabindex="-1">Skor</h1><p class="tagline">Quiz match scorer</p></div></div>
+<p class="hint about" id="about">A free live scorer for quizbowl, University Challenge and other buzzer quizzes. No sign-in, and it works offline once opened.</p>
+</main>
 <noscript><p class="shell">Skor needs JavaScript. Turn it on for this site and reload.</p></noscript>
 <script type="module" src="app.js"></script>
 </body>

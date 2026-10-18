@@ -798,7 +798,10 @@ function renderHome(root, state) {
     state.ui.clash ? clashCard(state.ui.clash) : null);
 
   root.append(
-    h('div', { class: 'top' }, h('div', {}, h('h1', { tabindex: '-1' }, 'Skor'), h('p', { class: 'tagline' }, 'Match scorer'))),
+    // The top bar and the about line are also written into index.html's #app, word for word, for search engines
+    // that do not run this file; drawn the same here, nothing moves when Home replaces them.
+    h('div', { class: 'top' }, h('div', {}, h('h1', { tabindex: '-1' }, 'Skor'), h('p', { class: 'tagline' }, 'Quiz match scorer'))),
+    h('p', { class: 'hint about', id: 'about' }, 'A free live scorer for quizbowl, University Challenge and other buzzer quizzes. No sign-in, and it works offline once opened.'),
     menu,
     h('div', { class: 'notes' },
       h('p', { class: 'hint', id: 'device-note' }, 'Matches are kept on this device only. Nothing is sent anywhere. Save a backup file at halftime and at the end.'),
