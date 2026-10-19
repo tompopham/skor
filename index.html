@@ -101,15 +101,6 @@ html[data-start="board"] #app:not([data-screen]) { visibility: hidden; }
 /* Setup */
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 legend { padding: 0; font-weight: bold; }
-.presets { display: grid; gap: 4px; }
-.presets legend { margin-bottom: 4px; }
-.preset { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; border: 1px solid var(--line); background: var(--btn); padding: 10px; min-height: 48px; cursor: pointer; font-size: 16px; }
-.preset.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-.preset.on input { accent-color: var(--bg); }
-.preset .pbody { display: grid; gap: 2px; min-width: 0; }
-.preset .pname { font-weight: bold; overflow-wrap: anywhere; }
-.preset .psrc { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
-.preset.on .psrc { color: #cccccc; }
 .tag { border: 1px solid currentColor; padding: 0 4px; margin-left: 8px; font-size: 12px; font-weight: normal; white-space: nowrap; }
 details.fold { border: 1px solid var(--line); margin-bottom: 8px; min-width: 0; }
 details.fold > summary { padding: 13px 12px; min-height: 48px; cursor: pointer; font-weight: bold; background: var(--btn); }
@@ -127,10 +118,45 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 .optnum.wide { grid-template-columns: 1fr; }
 .four { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 @media (max-width: 560px) { .four { grid-template-columns: 1fr 1fr; } }
-.seatrow { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
-.seatrow .btn { min-width: 88px; }
-.startbar { display: grid; gap: 8px; max-width: 480px; }
-.startbar .btn { min-height: 56px; }
+/* New match on one window (review 19/10/2026, change 3). The format dropdown, Rules and Details sit in the top bar from
+   640 px, and on a row of their own under the title below that; the summary line under it has a fixed slot (one line
+   from 640 px, two below), so nothing moves when the format changes. A team card has no labels: the seat number sits in
+   a 20 px gutter and the name box is bold; 4 px gaps. Its heading shows only in a window taller than 520 px. Rules and
+   Match details show only once opened. Start is in a bar held at the bottom of the window. Boxes on their own are 40 px
+   with a mouse and 44 px on a touch screen; beside a 48 px button they stretch to 48. */
+#app[data-screen="setup"] { padding-bottom: 0; }
+.top.setuptop { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title acts" "fmt fmt"; align-items: center; gap: 4px 8px; padding-bottom: 4px; margin-bottom: 4px; }
+.setuptop h1 { grid-area: title; }
+.setuptop .acts { grid-area: acts; }
+.setuptop .fmt { grid-area: fmt; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; min-width: 0; }
+.setuptop select { min-height: 48px; }
+@media (min-width: 640px) { .top.setuptop { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "title fmt acts"; } }
+#format-summary { font-size: 14px; line-height: 18px; height: 36px; margin: 0 0 4px; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+@media (min-width: 640px) { #format-summary { height: 18px; -webkit-line-clamp: 1; } }
+.tcards { gap: 8px; }
+.card.tcard { padding: 8px; gap: 4px; margin-bottom: 0; }
+.tcard h2 { font-size: 14px; }
+@media (max-height: 520px) { .tcard h2 { display: none; } }
+.trow { display: grid; grid-template-columns: 20px minmax(0, 1fr) 88px; gap: 4px; align-items: stretch; }
+.trow .gut { align-self: center; text-align: center; font-size: 14px; color: var(--muted); }
+.trow .btn { min-width: 0; padding: 0 6px; }
+.trow.bench input { grid-column: 2 / -1; }
+.tbold { font-weight: bold; }
+.benchrows { display: grid; gap: 4px; }
+.benchrows[hidden] { display: none; }
+.benchrows > .btn { margin-left: 24px; }
+details.fold.shut:not([open]) { display: none; }
+#rules-source { font-size: 13px; }
+.startbar { position: sticky; bottom: 0; z-index: 2; background: var(--bg); border-top: 1px solid var(--line); padding: 8px 0; margin-top: 4px; }
+#start-match { min-height: 52px; width: 100%; max-width: 480px; }
+/* A box brought into view (Tab, the phone's next-field arrow) stops above the Start bar, not under it. */
+#app[data-screen="setup"] form :is(input, select, button, summary) { scroll-margin-bottom: 80px; }
+#setup-hint { margin: 0 0 4px; }
+/* One line from 640 px, cut short rather than wrapped, so a scroll bar's 15 px cannot push the page past Tom's window. */
+@media (min-width: 640px) { #setup-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
+@media (pointer: coarse) {
+  #app[data-screen="setup"] input:not([type="checkbox"]):not([type="radio"]), #app[data-screen="setup"] select { min-height: 44px; }
+}
 .unbuilt { max-width: 480px; display: grid; gap: 8px; }
 .unbuilt h1 { font-size: 18px; margin: 0; }
 
@@ -140,6 +166,32 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 .stack { display: grid; gap: 6px; }
 .stack .btn { width: 100%; text-align: left; min-height: 48px; }
 .dtext { margin: 0; overflow-wrap: anywhere; }
+/* A dialog with a fixed header (ask's `head`): the title, with Close at the right (and a way back at the left), stays at
+   the top while the card scrolls. The menu's card (review 19/10/2026, change 2) is fixed to the top of the screen, and from
+   640 px is wider, with its three groups side by side; on a phone two buttons share a row. A greyed button keeps its label
+   and gives the reason on a second line. */
+.dialog.anchored { place-items: start center; }
+.dialog .card.mcard, .dialog .card.hcard { padding: 0; gap: 0; }
+@media (min-width: 640px) { .dialog .card.mcard { max-width: 640px; } }
+.dhead { position: sticky; top: 0; z-index: 1; background: var(--bg); display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.dhead b { flex: 1; min-width: 0; font-size: 18px; overflow-wrap: anywhere; }
+.dhead .btn { flex: none; min-width: 72px; }
+.dbody { padding: 6px 10px 10px; display: grid; gap: 6px; min-width: 0; }
+.mgroups { display: grid; gap: 6px; }
+.mgroup { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.mgroup h3 { margin: 0; font-size: 13px; line-height: 16px; font-weight: bold; color: var(--muted); }
+.mbtns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+.mbtns .btn { width: 100%; min-width: 0; text-align: left; padding: 0 10px; overflow-wrap: anywhere; }
+.mbtns .btn.full { grid-column: 1 / -1; }
+.mbtns .btn.two { justify-items: start; padding: 2px 10px; }
+.mbtns .btn .sub { text-align: left; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.mbtns .btn:disabled .sub { color: var(--muted); }
+.mbtns .btn[aria-pressed="true"] .sub { color: #cccccc; }
+@media (min-width: 640px) {
+  .mgroups { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .mbtns { grid-template-columns: minmax(0, 1fr); }
+  .mbtns .btn.full { grid-column: auto; }
+}
 
 /* Shared controls: a long name wraps rather than pushing a row wider than its card (Review Focus 3). */
 .splitset { display: grid; gap: 2px; min-width: 0; }
@@ -147,12 +199,63 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 .chk span { min-width: 0; overflow-wrap: anywhere; }
 
 /* The scoring screen (spec 6.3): the plain look above, plus what this screen adds. */
+/* No bottom padding at any width, so a University Challenge bonus fits Tom's 470 px window and a 375 x 812 phone. */
+#app[data-screen="score"] { padding-bottom: 0; }
 .score-layout { display: grid; gap: 12px; }
 .score-layout > .main { min-width: 0; }
 .side { display: none; }
+/* From 640 px wide (Tom's 756 px Chrome window, laptops, tablets) two blocks side by side (review 19/10/2026, change 1):
+   the team names, scores and seats on the left; the status line, the UC chips or trivia Format, and the action bar or
+   bonus panel in a column on the right, so the whole screen fits without scrolling. The five parts are siblings in .main,
+   so only the grid places them. Power, 10, Neg and Wrong are a 2 x 2 of 56 px (with three, the first goes across), Dead
+   has a 56 px row of its own under them, and the two Lose turn buttons share a 48 px row under that. */
+@media (min-width: 640px) {
+  .score-layout > .main {
+    display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 40%, 320px); grid-template-rows: auto auto auto 1fr;
+    grid-template-areas: "teams status" "teams picker" "teams bar" "teams banners"; column-gap: 16px; align-items: start;
+  }
+  .main > .teams { grid-area: teams; }
+  .main > .statusline { grid-area: status; }
+  .main > .picker { grid-area: picker; margin-bottom: 0; }   /* 8 px less under the UC chips, so a UC bonus fits 470 px */
+  .main > .bar { grid-area: bar; margin-top: 0; padding-top: 0; border-top: 0; align-content: start; }
+  .main > .banners { grid-area: banners; }
+  #results { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+  #results > .btn { grid-column: span 3; min-height: 56px; }
+  #results > .btn:first-child:nth-last-child(3) { grid-column: span 6; }
+  #others { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px; }
+  #others > #dead { grid-column: 1 / -1; order: -1; min-height: 56px; }
+  .top.scoretop { padding-bottom: 4px; margin-bottom: 4px; }
+  .banners:empty { margin: 0; }
+}
+/* 900 to 1099 px: the keys and the recent questions side by side under the two blocks. From 1100 px they are a third
+   column, and the scoring screen may be 1200 px wide. Below 900 they are hidden. */
 @media (min-width: 900px) {
-  .score-layout { grid-template-columns: minmax(0, 1fr) 290px; align-items: start; }
-  .side { display: grid; gap: 16px; align-content: start; }
+  .side { display: grid; gap: 16px; align-content: start; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (min-width: 1100px) {
+  .score-layout { grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
+  .side { grid-template-columns: minmax(0, 1fr); }
+  #app[data-screen="score"], .timelayer { max-width: 1200px; }
+}
+/* A phone in a bonus (Tom's decision 4, option A): the eight seats cannot be pressed while a bonus is open, so they go
+   below the bonus panel, and the team names and scores stay where they were. The only move the scoring screen makes
+   within a question, and only on a phone. */
+@media (max-width: 639px) {
+  .main[data-stage="bonus"] { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 8px; }
+  .main[data-stage="bonus"] > .teams, .main[data-stage="bonus"] .team { display: contents; }
+  .main[data-stage="bonus"] > .statusline { grid-column: 1 / -1; grid-row: 1; }
+  .main[data-stage="bonus"] > .picker { grid-column: 1 / -1; grid-row: 2; }
+  .main[data-stage="bonus"] .team:first-child > * { grid-column: 1; }
+  .main[data-stage="bonus"] .team:last-child > * { grid-column: 2; }
+  .main[data-stage="bonus"] .tname { grid-row: 3; }
+  .main[data-stage="bonus"] .score { grid-row: 4; margin-top: 4px; }
+  .main[data-stage="bonus"] > .bar { grid-column: 1 / -1; grid-row: 5; }
+  .main[data-stage="bonus"] .seat { margin-top: 4px; }
+  .main[data-stage="bonus"] .seat:nth-of-type(1) { grid-row: 6; margin-top: 8px; }
+  .main[data-stage="bonus"] .seat:nth-of-type(2) { grid-row: 7; }
+  .main[data-stage="bonus"] .seat:nth-of-type(3) { grid-row: 8; }
+  .main[data-stage="bonus"] .seat:nth-of-type(4) { grid-row: 9; }
+  .main[data-stage="bonus"] > .banners { grid-column: 1 / -1; grid-row: 10; }
 }
 @media (max-width: 899px) { .seat .key { display: none; } .part .kh { display: none; } }
 .statusline { height: 38px; margin: 0 0 6px; font-size: 14px; line-height: 1.35; color: var(--muted); overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
@@ -175,7 +278,7 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 .part.head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .part .btn { padding: 0 4px; }
 .part .lab small, .kh { color: var(--muted); font-size: 12px; margin-left: 4px; }
-.bonushead { margin: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bonushead { margin: 0; font-size: 14px; line-height: 19px; height: 38px; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .banners { display: grid; gap: 8px; margin-top: 10px; }
 .banner { border: 1px solid var(--line); padding: 8px 10px; display: grid; gap: 6px; min-width: 0; }
 .banner p { margin: 0; overflow-wrap: anywhere; }

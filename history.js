@@ -36,3 +36,11 @@ export function createHistory(initial, limit = 200) {
     canRedo: () => future.length > 0,
   };
 }
+
+// Whether the match in memory is the same version as the stored copy: the same match, at the same rev, last changed at the
+// same moment. Leaving for Home and pressing Resume then keeps the undo history (review 19/10/2026), since nothing else
+// can have changed the record in between; anything else (another tab's save, an import) starts a fresh history.
+export function sameVersion(a, b) {
+  if (!a || !b) return false;
+  return a.id === b.id && a.rev === b.rev && a.changedAt === b.changedAt;
+}

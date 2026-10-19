@@ -14,7 +14,7 @@ import { keyToCommand, tapGuard, sittingNow } from './keys.js';
 import { lineupsOf, playersOf, playerName } from './lineup.js';
 import { loadSettings, saveSettings } from './storage.js';
 import { resultLine } from './files.js';
-import { clockRunning, elapsed, countdownState, defaultClockRules, timeoutsUsed, timeSummary, formatLength } from './clock.js';
+import { clockRunning, played, countdownState, defaultClockRules, timeoutsUsed, timeSummary, formatLength } from './clock.js';
 import { unlockSound, gong, beep } from './sound.js';
 import { h } from './dom.js';
 import {
@@ -22,6 +22,7 @@ import {
 } from './view-common.js';
 import { renderCycleEditor, renderRulesEditor } from './view-editor.js';
 import { protestFlow, throwOutFlow, boundsWords } from './view-protest.js';
+import { menuModel, showMenu } from './view-menu.js';
 
 // ---- Words and numbers -----------------------------------------------------------------------
 
@@ -45,6 +46,9 @@ function trackStage(match, d) {
   }
 }
 const tapBlocked = state => tapGuard(performance.now(), Math.max(stage.at, state.enteredAt ?? -Infinity));
+// A pointer tap on Undo or Redo within 350 ms of the editor closing is the second tap of a double tap on its Cancel or Save,
+// which sit where Undo, Redo and Menu are. A key press, or a click made by the page, is never held back.
+const justLeftEditor = (state, event) => event.detail > 0 && tapGuard(performance.now(), state.subClosedAt);
 
 let live = null;
 let listening = false;
@@ -179,7 +183,7 @@ function renderMain(root, state, api) {
   root.append(
     topBar(c),
     h('div', { class: 'score-layout' },
-      h('div', { class: 'main' },
+      h('div', { class: 'main', 'data-stage': d.open.stage },
         h('p', { class: ui.msg ? 'statusline err' : 'statusline', id: 'statusline', role: 'status' }, ui.msg || d.lastEvent),
         picker(c),
         teamsView(c),
@@ -219,8 +223,8 @@ function topBar(c) {
       h('div', { class: 'info' }, [match.rules.name, phaseTag(c)].filter(Boolean).join(' · '))),
     clockSlot(c),
     h('div', { class: 'acts' },
-      small('undo', 'Undo', () => api.undo(), !state.history.canUndo()),
-      small('redo', 'Redo', () => api.redo(), !state.history.canRedo()),
+      small('undo', 'Undo', event => { if (!justLeftEditor(state, event)) api.undo(); }, !state.history.canUndo()),
+      small('redo', 'Redo', event => { if (!justLeftEditor(state, event)) api.redo(); }, !state.history.canRedo()),
       small('menu', 'Menu', () => openMenu(c))));
 }
 
@@ -353,7 +357,8 @@ function starterBar(c) {
     const turn = wrong => c.tap(() => c.act({ type: 'streak', team: sel.team, seat: sel.seat, answers: n, wrong }));
     const setN = next => c.tap(() => c.ui.streakN !== next && c.api.setUi({ streakN: next }));
     rows.push(
-      promptLine(starter ? (sel ? `${who}: how many answers, and how did the turn end?` : stuck ? 'Nobody can answer this one: tap Streak over' : 'Tap the seat that is naming answers') : ''),
+      // The prompt carries the format's line (no line of its own, so the Streak screen fits one window: review change 1).
+      promptLine(starter ? (sel ? `${who}: how many answers, and how did the turn end?` : stuck ? 'Nobody can answer this one: tap Streak over' : `Streak, ${value} an answer: tap the seat that is naming answers`) : ''),
       h('div', { class: 'row', id: 'streak-count' },
         h('button', { type: 'button', class: 'btn', id: 'streak-minus', 'aria-label': 'One fewer answer', disabled: !sel || n <= 0, onclick: setN(Math.max(0, n - 1)) }, MINUS),
         h('button', { type: 'button', class: 'btn', id: 'streak-n', disabled: true }, `${n} ${n === 1 ? 'answer' : 'answers'}`),
@@ -383,7 +388,7 @@ function starterBar(c) {
 
   if (rules.trivia) {
     rows.push(
-      h('p', { class: 'hint', id: 'formatline' }, formatLine(c)),
+      streak ? null : h('p', { class: 'hint', id: 'formatline' }, formatLine(c)),
       h('div', { class: 'row', id: 'trivia-row' },
         h('button', {
           type: 'button', class: 'btn', id: 'next-clue', disabled: !(starter && open.format === 'jackpot' && open.cycleId),
@@ -444,7 +449,7 @@ function bonusPanel(c) {
     h('button', { type: 'button', class: 'btn', id: 'none-got', onclick: c.tap(() => c.act({ type: 'noneGot' }, {})) }, 'None got'),
     h('button', { type: 'button', class: 'btn primary', id: 'bonus-done', onclick: c.tap(() => c.act({ type: 'closeBonus' }, {})) }, 'Done')));
   rows.push(h('div', { class: 'row' },
-    h('button', { type: 'button', class: 'btn', id: 'bonus-number', onclick: c.tap(() => setBonusNumber(c)) }, 'Set bonus number'),
+    h('button', { type: 'button', class: 'btn', id: 'bonus-number', onclick: c.tap(() => setBonusNumber(c)) }, 'Set number'),
     rules.bonus.passRest ? h('button', { type: 'button', class: 'btn', id: 'pass-rest', disabled: !bonus.canPassRest, onclick: c.tap(() => c.act({ type: 'passRest' }, {})) }, 'Pass rest') : null,
     !bounce ? h('button', { type: 'button', class: 'btn', id: 'enter-total', disabled: !bonus.canTotal, onclick: c.tap(() => enterBonusTotal(c)) }, 'Enter total') : null));
   return rows;
@@ -493,8 +498,17 @@ async function endQuarterFlow(c) {
   if (choice === 'end') c.act({ type: 'endQuarter' });
 }
 
+// Halftime from the menu: asks first (Tom's decision 2), records it, then shows the score check. Once recorded, the menu
+// item only shows the score check again.
 async function halftimeFlow(c) {
-  if (c.d.phase.halftimeAfterCycleId === null && !c.act({ type: 'halftime' }, {})) return;
+  if (c.d.phase.halftimeAfterCycleId === null) {
+    const last = c.d.cycles.at(-1);
+    const choice = await c.api.ask({
+      title: 'Halftime now?', body: `Halftime goes after Q${last?.number ?? 0}, and the score check follows. Undo takes it back.`,
+      buttons: [{ label: 'Halftime', value: 'halftime', primary: true }, CANCEL],
+    });
+    if (choice !== 'halftime' || !c.act({ type: 'halftime' }, {})) return;
+  }
   const match = c.state.match;
   const d = derive(match);
   await c.api.ask({
@@ -504,8 +518,8 @@ async function halftimeFlow(c) {
   });
 }
 
-// Time called (the G key and the menu). With a seat chosen under rules where a buzz already in may
-// answer, first asks whether the answer counts (spec 6.3).
+// Time called (the G key and the menu). It always asks first (Tom's decision 2): with a seat chosen under rules where a
+// buzz already in may answer, the question is whether the answer counts (spec 6.3); otherwise just whether to call time.
 async function callTime(c) {
   const { match, d, ui, api } = c;
   const sel = ui.selected;
@@ -516,8 +530,14 @@ async function callTime(c) {
       body: `${c.who(sel.team, sel.seat)} has buzzed in. Does the answer count?`,
       buttons: [{ label: 'Yes, the answer counts', value: 'allow', primary: true }, { label: 'No, it does not count', value: 'no' }, { label: 'Cancel', value: 'cancel' }],
     });
-    if (choice === 'cancel') return;
+    if (choice !== 'allow' && choice !== 'no') return;
     allowBuzz = choice === 'allow';
+  } else {
+    const choice = await api.ask({
+      title: 'Call time?', body: 'This records that time has been called (the gong). Undo takes it back.',
+      buttons: [{ label: 'Time called', value: 'time', primary: true }, CANCEL],
+    });
+    if (choice !== 'time') return;
   }
   c.act({ type: 'timeCalled', allowBuzz }, allowBuzz || match.rules.atTime === 'finishCycle' ? {} : { selected: null, streakN: 0 });
 }
@@ -574,10 +594,12 @@ function leftText(leftMs) {
   return `+${formatLength(Math.floor(-leftMs / 1000) * 1000)}`;
 }
 
+// With no countdown it is the time played, which stands still while the clock is paused (Tom, 19/10/2026), up to the
+// last question closed once the match is over.
 function slotText(match, d, now) {
-  if (d.phase.ended) return formatLength(timeSummary(match, d).game);
   const count = countdownState(match, now);
-  if (count === null) return formatLength(Math.max(0, elapsed(match, now) ?? 0));
+  if (d.phase.ended) return formatLength((count === null ? timeSummary(match, d).played : null) ?? timeSummary(match, d).game);
+  if (count === null) return formatLength(Math.max(0, played(match, now) ?? 0));
   if (!(match.clock ?? []).some(event => event.type === 'start')) return 'Start clock';
   return count.running ? leftText(count.left) : 'Paused';
 }
@@ -831,68 +853,42 @@ async function swapFlow(c) {
 
 // ---- Menu ------------------------------------------------------------------------------------
 
+// The menu's panels are drawn by view-menu.js; this does what the chosen button says. The two settings in More are switched
+// there, in place, and the screen is drawn again once the menu closes.
 async function openMenu(c) {
-  const { match, d, api } = c;
-  const { phase } = d;
-  const timeDone = match.markers.some(m => m.type === 'timeCalled');
-  const threeStarters = phase.overtime?.mode === 'threeStarters';
-  const halftimeOk = phase.halftimeAfterCycleId !== null || (!phase.ended && !phase.regulationOver && d.cycles.some(x => x.closed));
-  const keysOn = keysAreOn();
-  const namesHidden = loadSettings().hideNames === true;
-  const swapReady = d.open.cycleId === null;   // a swap is made between questions (the engine refuses it while one is open)
+  const { api } = c;
+  const options = () => ({ keysOn: keysAreOn(), namesHidden: loadSettings().hideNames === true, updateReady: api.updateReady() });
+  let toggled = false;
+  const onToggle = value => {
+    toggled = true;
+    const settings = loadSettings();
+    if (value === 'keys') saveSettings({ ...settings, singleKeys: !keysAreOn() });
+    if (value === 'boardnames') saveSettings({ ...settings, hideNames: settings.hideNames !== true });
+  };
+  const choice = await showMenu(api, () => menuModel(c.state.match, derive(c.state.match), options()), onToggle);
+  const { match } = c.state;
+  const d = derive(match);
   const aim = d.open.cycleId ?? d.cycles.at(-1)?.id ?? null;   // Protest and Throw out act on the open question, else the last
-  const [leftTeam, rightTeam] = leftRight(match);
-  const buttons = [
-    { label: clockRunning(match) ? 'Pause clock' : 'Start clock', value: 'clock', disabled: phase.ended },
-    { label: `Timeout: ${teamName(match, leftTeam)}`, value: `timeout${leftTeam}`, disabled: phase.ended },
-    { label: `Timeout: ${teamName(match, rightTeam)}`, value: `timeout${rightTeam}`, disabled: phase.ended },
-    { label: 'Halftime (score check)', value: 'halftime', disabled: !halftimeOk },
-    { label: swapReady ? 'Swap players' : 'Swap players (between questions only)', value: 'subs', disabled: !swapReady },
-    { label: aim ? 'Protest' : 'Protest (no question yet)', value: 'protest', disabled: !aim },
-    { label: aim ? 'Throw out' : 'Throw out (no question yet)', value: 'throwout', disabled: !aim },
-    { label: 'Time called / gong', value: 'time', disabled: phase.ended || phase.regulationOver || timeDone },
-    { label: 'Swap sides', value: 'swap' },
-    { label: 'Reverse seat order', value: 'reverse' },
-    { label: 'Edit rules', value: 'rules' },
-    { label: 'Scoresheet and stats', value: 'sheet' },
-    { label: 'Print', value: 'print' },
-    { label: 'Save files', value: 'files' },
-    { label: 'Room board', value: 'board' },
-    { label: `Room board player names: ${namesHidden ? 'hidden' : 'shown'}`, value: 'boardnames' },
-    { label: `Single-key shortcuts: ${keysOn ? 'on' : 'off'}`, value: 'keys' },
-    { label: threeStarters ? 'End match (not before the third overtime starter)' : 'End match', value: 'end', disabled: phase.ended || threeStarters },
-    { label: 'Home', value: 'home' },
-    { label: 'Close menu', value: 'cancel' },
-  ];
-  // A new version of the page is waiting: one line, with its Reload, at the top. (Above the scoring screen itself
-  // it would move the buttons, so that is the only place it shows here: R36.)
-  const update = api.updateReady()
-    ? h('div', { class: 'updateline', id: 'menu-update' },
-      h('span', {}, 'Update ready: reload when the match is over'),
-      h('button', { type: 'button', class: 'btn', id: 'menu-update-reload', onclick: () => api.applyUpdate() }, 'Reload'))
-    : null;
-  const choice = await api.ask({ title: 'Menu', body: update ?? [], buttons });
+  const now = makeContext(c.state, api);
   switch (choice) {
-    case 'clock': return c.act({ type: 'clock', run: !clockRunning(c.state.match) }, {});
-    case 'timeout0': return takeTimeout(c, 0);
-    case 'timeout1': return takeTimeout(c, 1);
-    case 'halftime': return halftimeFlow(c);
-    case 'subs': return swapFlow(c);
-    case 'protest': return protestFlow({ api, match: c.state.match, cycleId: aim });
-    case 'throwout': return throwOutFlow({ api, match: c.state.match, cycleId: aim, patch: { selected: null, streakN: 0 }, say: c.say });
-    case 'time': return callTime(c);
+    case 'clock': return now.act({ type: 'clock', run: !clockRunning(match) }, {});
+    case 'timeout0': return takeTimeout(now, 0);
+    case 'timeout1': return takeTimeout(now, 1);
+    case 'halftime': return halftimeFlow(now);
+    case 'subs': return swapFlow(now);
+    case 'protest': return protestFlow({ api, match, cycleId: aim });
+    case 'throwout': return throwOutFlow({ api, match, cycleId: aim, patch: { selected: null, streakN: 0 }, say: now.say });
+    case 'time': return callTime(now);
     case 'swap': return api.setDisplay({ leftTeam: 1 - leftRight(match)[0] });
     case 'reverse': return api.setDisplay({ seatOrder: match.display?.seatOrder === 'desc' ? 'asc' : 'desc' });
     case 'rules': return api.setUi({ sub: { kind: 'rules' }, selected: null });
     case 'sheet': return api.go('sheet');
     case 'print': return api.go('sheet', { action: 'print' });
     case 'files': return api.go('sheet', { action: 'files' });
-    case 'board': return openBoard(c);
-    case 'boardnames': saveSettings({ ...loadSettings(), hideNames: !namesHidden }); return api.setUi({});
-    case 'keys': saveSettings({ ...loadSettings(), singleKeys: !keysOn }); return api.setUi({});
-    case 'end': return endMatchFlow(c);
+    case 'board': return openBoard(now);
+    case 'end': return endMatchFlow(now);
     case 'home': return api.go('home');
-    default: return undefined;
+    default: return toggled ? api.setUi({}) : undefined;
   }
 }
 
@@ -969,7 +965,7 @@ function legend(c) {
   if (rules.starterTypes.on) items.push(['T', 'Change the starter type']);
   items.push(['G', 'Time called'], ['Ctrl/Cmd+Z', 'Undo'], ['+ Shift', 'Redo'], ['Esc', 'Cancel']);
   return h('div', {}, h('h2', {}, 'Keys'),
-    keysAreOn() ? null : h('p', { class: 'hint' }, 'Single-key shortcuts are off (Menu). Undo and redo still work.'),
+    keysAreOn() ? null : h('p', { class: 'hint' }, 'Single-key shortcuts are off (Menu, then More). Undo and redo still work.'),
     h('dl', { class: 'legend', id: 'legend' }, items.flatMap(([keys, text]) => [h('dt', {}, keys), h('dd', {}, text)])));
 }
 

@@ -45,6 +45,13 @@ export function elapsed(match, now) {
   return first ? now - first.from : null;
 }
 
+// Time played: how long the clock has run, pauses (and halftime) left out, so it stands still while the clock is
+// stopped; null before it has started. What the top bar shows when the rules have no countdown (Tom, 19/10/2026).
+export function played(match, now) {
+  const runs = runsOf(match);
+  return runs.length > 0 ? runTime(runs, -Infinity, now) : null;
+}
+
 export function timeoutsUsed(match, team) {
   return match.markers.filter(marker => marker.type === 'timeout' && marker.team === team).length;
 }
@@ -125,6 +132,7 @@ export function timeSummary(match, derived) {
   const game = since(lastClose);
   return {
     game,
+    played: first !== null && isTime(lastClose) ? runTime(runs, -Infinity, lastClose) : null,   // to the last close, pauses left out
     halves: halvesOf(match, derived, runs, since, lastIndex, lastClose),
     average: game !== null && counted.length > 0 ? game / counted.length : null,
     closedAt: match.cycles.map(cycle => since(cycle.closedAt)),

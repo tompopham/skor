@@ -3,7 +3,7 @@
 // (root, state, api). Nothing here is exported.
 
 import { applyAction, derive, RefusedError } from './engine.js';
-import { createHistory } from './history.js';
+import { createHistory, sameVersion } from './history.js';
 import {
   saveMatch, loadMatch, deleteMatch, setCurrent, getCurrent, parseBackup, mergeDecision, matchKey, detectForeignChange,
 } from './storage.js';
@@ -19,12 +19,14 @@ import { VERSION } from './version.js';
 // state.history: its undo/redo versions. state.ui: what the current screen is showing (a form
 // draft, a selected seat, a message); `go` clears it except for the keys in KEEP_UI.
 // state.enteredAt: when the screen was last entered (performance.now()), which the scoring screen
-// uses to ignore taps just after it opens. state.foreign: another tab has saved this match.
+// uses to ignore taps just after it opens. state.subClosedAt: when the cycle editor or Edit rules last closed, so a quick
+// double tap on its Cancel or Save cannot land on Undo, Redo or Menu underneath. state.foreign: another tab has saved this match.
 // state.viewOnly: the match is open only to look at in Past matches (R34), so the room board is not told
 // about it unless it is also the match in progress. START is the page's first screen: the room board when
 // the address ends in #board (the scorer's Room board menu item opens a window like that), otherwise Home.
 const START = location.hash === '#board' ? 'board' : 'home';
-const state = { screen: START, match: null, history: null, ui: {}, enteredAt: 0, foreign: false, viewOnly: false };
+const state = { screen: START, match: null, history: null, ui: {}, enteredAt: 0, subClosedAt: null, foreign: false, viewOnly: false };
+const noteSubClose = patch => { if (state.ui.sub && patch && 'sub' in patch && !patch.sub) state.subClosedAt = performance.now(); };
 const KEEP_UI = ['setup'];
 
 // How saving is going (spec 7). `safeAt` is the number of cycles that are safely stored: on this
@@ -84,6 +86,7 @@ function closeSub() {
 
 // Changes what the current screen shows; redraws unless the caller has already updated the page.
 function setUi(patch, redraw = true) {
+  noteSubClose(patch);
   Object.assign(state.ui, patch);
   if (redraw) render();
 }
@@ -240,9 +243,18 @@ function startMatch(match) {
   go('score');
 }
 
-// Resume, and a backup file that is already saved here: the stored copy becomes the match in progress.
+// Resume, and a backup file that is already saved here: the stored copy becomes the match in progress. When it is the very
+// version already in memory (Home, then Resume: nothing can have changed it in between), the one in memory stays, with its
+// undo history, so Undo still works after a trip to Home (review 19/10/2026). Otherwise it is opened afresh.
 function resumeMatch(match) {
-  openMatch(match);
+  if (state.history && !state.foreign && sameVersion(state.match, match)) {
+    state.viewOnly = false;
+    save.safeAt = state.match.cycles.length;
+    save.backupError = null;
+    broadcast();
+  } else {
+    openMatch(match);
+  }
   recordSave([setCurrent(state.match.id)], state.match);
   keepAwake();
   go('score');
@@ -273,6 +285,7 @@ function dispatchAll(actions, uiPatch = {}) {
     throw error;
   }
   state.history.push(next);
+  noteSubClose(uiPatch);
   Object.assign(state.ui, { msg: '' }, uiPatch);
   commit(next);
   return { ok: true };
@@ -347,7 +360,7 @@ function deleteSaved(id) {
 
 // A saved copy of this match with a higher rev than the one last saved here means another tab has
 // been saving it. That tab and this one would write over each other, so this one stops. Only the
-// screens that show the match are stopped: Resume on Home always opens the saved copy afresh.
+// screens that show the match are stopped: Resume on Home opens the saved copy afresh, as it is then another version.
 function checkForeign() {
   if (!state.match || state.foreign || !MATCH_SCREENS.includes(state.screen)) return;
   const stored = loadMatch(state.match.id);
@@ -519,8 +532,9 @@ function onBack(event) {
     openAsks.at(-1)?.('cancel');                   // a dialog is open: back closes it (the modal for another tab's change stays)
     holdEntry(was, to);
   } else if (state.screen === 'score' && state.ui.sub) {
-    holdEntry(was, to);                            // the editor: back discards it, as Cancel does
-    closeSub();
+    holdEntry(was, to);                            // the editor: back does what Cancel does (the cycle editor asks before discarding)
+    if (state.ui.sub.onLeave) state.ui.sub.onLeave();
+    else closeSub();
   } else if (state.screen === 'score') {
     holdEntry(was, to);                            // the match: ask before leaving it
     leaveMatch();
@@ -556,14 +570,23 @@ function leaveBoardAddress() {
 // ---- Dialogs: the only way to ask "are you sure?" ----------------------------------------------
 
 // Shows an in-page dialog and resolves with the value of the button chosen. `body` is a string, a
-// node or a list of either (a string becomes a paragraph). `buttons` are { label, value, primary,
+// node or a list of either (a string becomes a paragraph), or a function given `finish` that returns them, so a button
+// in the body can close the dialog with its own value. `buttons` are { label, value, primary,
 // disabled } or plain strings. Escape resolves 'cancel'. The first field in the body is focused, or
 // else the button whose value is 'cancel', so Enter cannot confirm something destructive by accident.
+// `head`: the title sits in a header that stays at the top as the card scrolls, with Close (value 'cancel') at its right
+// and, given `back` ({ label, value }), a button at its left. `menu`: the card is the menu's, wider and fixed to the top
+// of the screen, and a press that starts and ends on the dimmed area round it closes it (a drag onto the card does not).
+// A tap in the first 350 ms after a dialog opens is ignored (review 19/10/2026, change 2): the second tap of a quick
+// double tap on the button that opened it would otherwise land on whatever button is under the finger. Only a pointer's
+// click counts (event.detail > 0), so Enter and Space, and a click made by the page itself, are never held back.
 const FIELDS = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)';
+const DIALOG_GUARD_MS = 350;
 const openAsks = [];   // the dialogs showing, newest last: each is the function that closes it with a value
-function ask({ title, body = [], buttons = [] }) {
+function ask({ title, body = [], buttons = [], head = false, back = null, menu = false }) {
   return new Promise(resolve => {
     const specs = buttons.map(button => (typeof button === 'string' ? { label: button, value: button } : button));
+    const openedAt = performance.now();
     const finish = (value, popped = false) => {
       document.removeEventListener('keydown', onKey, true);
       openAsks.splice(openAsks.indexOf(finish), 1);
@@ -571,13 +594,38 @@ function ask({ title, body = [], buttons = [] }) {
       settleLayer(popped);
       resolve(value);
     };
-    const choices = specs.map(spec => h('button', {
-      type: 'button', class: spec.primary ? 'btn primary' : 'btn', disabled: spec.disabled === true, 'data-value': spec.value,
-      onclick: () => finish(spec.value),
-    }, spec.label));
-    const content = [body].flat().map(part => (typeof part === 'string' ? h('p', { class: 'dtext' }, part) : part));
-    const dialog = h('div', { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
-      h('div', { class: 'card' }, h('b', {}, title), content, h('div', { class: 'stack' }, choices)));
+    const button = (spec, extra = '') => h('button', {
+      type: 'button', class: ['btn', spec.primary ? 'primary' : '', extra].filter(Boolean).join(' '), disabled: spec.disabled === true,
+      'data-value': spec.value, onclick: () => finish(spec.value),
+    }, spec.label);
+    const choices = specs.map(spec => button(spec));
+    const content = [typeof body === 'function' ? body(finish) : body].flat()
+      .filter(part => part !== null && part !== undefined)
+      .map(part => (typeof part === 'string' ? h('p', { class: 'dtext' }, part) : part));
+    const top = head
+      ? h('div', { class: 'dhead' }, back ? button(back, 'dback') : null, h('b', {}, title), button({ label: 'Close', value: 'cancel' }, 'dclose'))
+      : h('b', {}, title);
+    const card = head
+      ? h('div', { class: menu ? 'card mcard' : 'card hcard' }, top, h('div', { class: 'dbody' }, content, choices.length > 0 ? h('div', { class: 'stack' }, choices) : null))
+      : h('div', { class: 'card' }, top, content, h('div', { class: 'stack' }, choices));
+    const dialog = h('div', { class: menu ? 'dialog anchored' : 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, card);
+    dialog.addEventListener('click', event => {
+      if (event.detail > 0 && performance.now() - openedAt < DIALOG_GUARD_MS) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, true);
+    if (menu) {
+      let fromBackdrop = false;
+      let toBackdrop = false;
+      dialog.addEventListener('pointerdown', event => { fromBackdrop = event.target === dialog; });
+      dialog.addEventListener('pointerup', event => { toBackdrop = event.target === dialog; });
+      dialog.addEventListener('click', event => {
+        if (event.target === dialog && fromBackdrop && toBackdrop) finish('cancel');
+        fromBackdrop = false;
+        toBackdrop = false;
+      });
+    }
     function onKey(event) {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -602,7 +650,7 @@ function ask({ title, body = [], buttons = [] }) {
     document.body.append(dialog);
     // preventScroll: the dialog opens at its top. A long one (the menu) would otherwise scroll down to its Close button,
     // hiding the items at the top, which are the ones wanted mid-match (Start clock, Timeout).
-    (dialog.querySelector('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? choices.find(button => button.dataset.value === 'cancel') ?? choices[0])?.focus({ preventScroll: true });
+    (dialog.querySelector('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? dialog.querySelector('[data-value="cancel"]') ?? choices[0])?.focus({ preventScroll: true });
   });
 }
 
@@ -788,7 +836,8 @@ function renderHome(root, state) {
       h('b', {}, 'Match in progress'),
       h('span', { class: 'resume-line' }, summary(inProgress)),
       h('span', { class: 'hint' }, `Last changed ${dateAndTime(inProgress.changedAt)}`),
-      h('button', { class: 'btn primary', id: 'resume', onclick: () => resumeMatch(inProgress) }, 'Resume')) : null,
+      // The stored copy as it is at the tap, not as it was when Home was drawn: another tab may have saved it since.
+      h('button', { class: 'btn primary', id: 'resume', onclick: () => { const now = loadMatch(current); if (now) resumeMatch(now); else render(); } }, 'Resume')) : null,
     h('button', { class: 'btn', id: 'past-matches', onclick: () => go('past') }, 'Past matches'),
     h('button', { class: 'btn', id: 'room-board', onclick: () => go('board') }, 'Room board'),
     h('button', { class: 'btn', id: 'load-backup', onclick: () => picker.click() }, 'Load backup file'),

@@ -26,6 +26,13 @@ const CSS = `
 .erow > .btn { flex: none; }
 .erow > .lab { flex: 0 0 64px; font-size: 14px; }
 .card > .inner { display: grid; gap: 12px; }
+.edhead { position: sticky; top: 0; z-index: 3; background: var(--bg); margin-top: -8px; padding-top: 8px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+/* Tab or a tap that brings a box into view stops it below the fixed header, not under it. */
+.editor :is(input, select, textarea, button) { scroll-margin-top: 120px; }
+.edhead .top { border-bottom: 0; padding-bottom: 4px; margin-bottom: 0; flex-wrap: nowrap; }
+.edhead .top .acts .btn { min-width: 80px; }
+#ed-strip { height: 38px; margin: 0 0 6px; font-size: 14px; line-height: 19px; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+#ed-strip.hint { color: var(--fg); }
 `;
 
 // ---- Edit rules ------------------------------------------------------------------------------
@@ -86,7 +93,7 @@ function tidy(draft, rules) {
 
 // The edited cycle checked by the engine on a copy of the match: its refusal, or the match as it
 // would stand, with derive() of that (the scores, and the flags on this and later cycles).
-function previewOf(match, cycleId, draft) {
+export function previewOf(match, cycleId, draft) {
   if (draft.dead && draft.buzzes.some(isCorrect)) {
     return { error: 'This question is marked dead, so a correct answer cannot be saved on it. Untick Dead first.' };
   }
@@ -96,6 +103,50 @@ function previewOf(match, cycleId, draft) {
   } catch (error) {
     return { error: refusalText(error) };
   }
+}
+
+// The line under Cancel and Save (review 19/10/2026, change 5): what Save would do, as { error, text }. When Save is
+// greyed, the reason; otherwise the scores after the change, left team first, and the questions from this one on that it
+// would leave flagged ("After: Team A 45, Team B 10 · Q7, Q8 flagged"). A long team name is cut short so both scores fit.
+const shortName = name => (Array.from(name).length > 17 ? `${Array.from(name).slice(0, 16).join('')}\u2026` : name);
+export function stripText(match, index, preview) {
+  if (preview.error) return { error: true, text: preview.error };
+  const scores = leftRight(match).map(team => `${shortName(teamName(match, team))} ${fmt(preview.d.scores[team])}`).join(', ');
+  const flagged = preview.d.cycles.slice(index).filter(dc => dc.flags.length > 0).map(dc => `Q${dc.number}`);
+  return { error: false, text: `After: ${scores}${flagged.length > 0 ? ` \u00b7 ${flagged.join(', ')} flagged` : ''}` };
+}
+
+// Whether the draft differs from the saved cycle in anything the editor itself changes. Protests and thrown-out questions
+// (v2 5) act at once on the record, never on the draft, and Save keeps them as they are, so they do not count; nor does the
+// order of the keys.
+const stable = value => JSON.stringify(value, (key, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v));
+const editedPart = ({ protests, thrownOut, openedAt, closedAt, ...rest }) => stable(rest);
+export const unsaved = (draft, saved) => editedPart(draft) !== editedPart(saved);
+
+// The keys of the cycle editor: Esc is Cancel and Ctrl+Enter (Cmd+Enter on a Mac) is Save. One listener for the page, idle
+// unless the editor is showing with no dialog over it; each draw of the editor tells it what to call.
+const editorKeys = { cancel: null, save: null, listening: false };
+function onEditorKey(event) {
+  if (!editorKeys.cancel || !document.getElementById('ed-save') || document.querySelector('.dialog')) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    editorKeys.cancel();
+  } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.repeat) {
+    event.preventDefault();
+    editorKeys.save();
+  }
+}
+
+// A redraw replaces every control, so the one in use is found again by its place among the editor's controls.
+const CONTROLS = '.edhead button, .edhead input, .edhead select, .edhead textarea, .editor button, .editor input, .editor select, .editor textarea';
+const focusedPlace = () => [...document.querySelectorAll(CONTROLS)].indexOf(document.activeElement);
+function refocus(place) {
+  if (place < 0) return;
+  const controls = [...document.querySelectorAll(CONTROLS)];
+  const at = Math.min(place, controls.length - 1);
+  // The same place, or when that control is now greyed (Add a buzz, once there are two) the nearest one after it, else before it.
+  const target = [...controls.slice(at), ...controls.slice(0, at).reverse()].find(control => !control.disabled);
+  target?.focus({ preventScroll: true });
 }
 
 export function renderCycleEditor(root, state, api) {
@@ -111,10 +162,39 @@ export function renderCycleEditor(root, state, api) {
   const d = derive(match);
   const number = index + 1;
   const [left, right] = leftRight(match);
-  const redraw = () => { tidy(draft, rules); api.setUi({}); };
+  const redraw = () => {
+    tidy(draft, rules);
+    const place = focusedPlace();
+    api.setUi({});
+    refocus(place);
+  };
   // Leaving the editor goes back to where it was opened from: the scoring screen, or the screen the
-  // scoresheet named (sub.returnTo).
+  // scoresheet named (sub.returnTo). With a change not saved it asks first (Tom's decision 5); Cancel, Esc and the
+  // phone's Back all come here (app.js calls sub.onLeave).
   const back = () => api.closeSub();
+  // A number box hands its value to the draft only on change (when it loses focus, or on Enter), so Esc, the phone's Back
+  // or Ctrl+Enter pressed with a number still being typed would miss it. Taking focus off the box first hands it over.
+  const commitTyping = () => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !active.closest('.editor, .edhead')) return null;
+    active.blur();
+    return active;
+  };
+  const leave = async () => {
+    const typing = commitTyping();
+    if (unsaved(draft, saved)) {
+      const choice = await api.ask({
+        title: 'Discard your changes?', body: `Your changes to Q${number} are not saved.`,
+        buttons: [{ label: 'Keep editing', value: 'cancel' }, { label: 'Discard', value: 'discard' }],
+      });
+      if (choice !== 'discard') {
+        if (typing?.isConnected) typing.focus({ preventScroll: true });
+        return;
+      }
+    }
+    back();
+  };
+  sub.onLeave = leave;
   const finished = result => {
     if (!result.ok) return false;
     if (sub.returnTo) api.go(sub.returnTo);
@@ -166,7 +246,7 @@ export function renderCycleEditor(root, state, api) {
     select(resultOptions.some(([v]) => v === buzz.result) ? resultOptions : [...resultOptions, [buzz.result, buzz.result]], buzz.result, v => { buzz.result = v; redraw(); }, { 'aria-label': `Buzz ${i + 1}: result` }),
     draft.format === 'jackpot' && rules.trivia
       ? select(rules.trivia.jackpot.map((points, k) => [k, `Clue ${k + 1}`]), buzz.clue ?? draft.clue, v => { buzz.clue = Number(v); redraw(); }, { 'aria-label': `Buzz ${i + 1}: clue` }) : null,
-    h('button', { type: 'button', class: 'btn small', onclick: () => { draft.buzzes.splice(i, 1); redraw(); } }, 'Remove'))));
+    h('button', { type: 'button', class: 'btn small', onclick: () => { draft.buzzes.splice(i, 1); redraw(); } }, 'Remove buzz'))));
   starter.push(h('button', {
     type: 'button', class: 'btn', id: 'ed-add-buzz', disabled: draft.buzzes.length >= 2,
     onclick: () => { draft.buzzes.push({ ...firstFree(draft.buzzes.map(b => b.team)), result: 'ten' }); redraw(); },
@@ -183,7 +263,7 @@ export function renderCycleEditor(root, state, api) {
       starter.push(h('div', { class: 'erow' },
         seatSelect(turn, `Streak turn ${i + 1}: who`), answers,
         check('Wrong or repeat', turn.wrong === true, on => { turn.wrong = on; refresh(); }),
-        h('button', { type: 'button', class: 'btn small', onclick: () => { draft.streak.splice(i, 1); redraw(); } }, 'Remove')));
+        h('button', { type: 'button', class: 'btn small', onclick: () => { draft.streak.splice(i, 1); redraw(); } }, 'Remove turn')));
     });
     starter.push(h('button', {
       type: 'button', class: 'btn', disabled: draft.streak.length >= 2,
@@ -245,19 +325,20 @@ export function renderCycleEditor(root, state, api) {
   note.value = draft.note ?? '';
   note.addEventListener('input', () => { draft.note = note.value; cards.sync(); });
 
-  // This cycle's protests and thrown-out questions (v2 5): they act at once on the record, never on the draft, and Save keeps them as
-  // they are, so they are left out of what "changed" means here. The throw-out buttons are greyed while the draft differs from the saved cycle.
-  const stable = value => JSON.stringify(value, (key, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v));
-  const editedPart = ({ protests, thrownOut, openedAt, closedAt, ...rest }) => stable(rest);
-  const cards = editorCards({ api, state, cycleId, sub, isDirty: () => editedPart(draft) !== editedPart(saved) });
+  // This cycle's protests and thrown-out questions (v2 5): the throw-out buttons are greyed while the draft differs from the saved cycle.
+  const cards = editorCards({ api, state, cycleId, sub, isDirty: () => unsaved(draft, saved) });
 
   // The preview: the engine's answer for this draft, and what it would do to the scores and flags.
   const preview = h('div', { class: 'card', id: 'ed-preview' });
   const saveButton = h('button', { type: 'button', class: 'btn primary', id: 'ed-save' }, 'Save');
+  const strip = h('p', { id: 'ed-strip', 'aria-live': 'polite' });
   function refresh() {
     cards.sync();
     const result = previewOf(match, cycleId, draft);
     saveButton.disabled = result.error !== undefined;
+    const line = stripText(match, index, result);
+    strip.className = line.error ? 'msg' : 'hint';
+    strip.textContent = line.text;
     if (result.error) {
       preview.replaceChildren(h('p', { class: 'msg', id: 'ed-error' }, result.error));
       return;
@@ -271,21 +352,36 @@ export function renderCycleEditor(root, state, api) {
   }
   refresh();
 
-  saveButton.addEventListener('click', () => {
+  const save = () => {
+    const typing = commitTyping();
+    if (saveButton.disabled) {
+      if (typing?.isConnected) typing.focus({ preventScroll: true });
+      return;
+    }
     const result = api.dispatch({ type: 'replaceCycle', cycleId, cycle: structuredClone(draft) }, { sub: null });
     if (!finished(result)) preview.replaceChildren(h('p', { class: 'msg', id: 'ed-error' }, refusalText(result.error)));
-  });
+  };
+  saveButton.addEventListener('click', save);
+  editorKeys.cancel = leave;
+  editorKeys.save = save;
+  if (!editorKeys.listening) {
+    editorKeys.listening = true;
+    document.addEventListener('keydown', onEditorKey);
+  }
 
   const onInsert = async () => {
     const choice = await api.ask({
       title: `Insert a question before Q${number}?`,
-      body: 'A new, empty question goes in here and later questions move down one. It starts as dead: open it and untick Dead to enter an answer.',
+      body: ['A new, empty question goes in here and later questions move down one. It starts as dead: open it and untick Dead to enter an answer.',
+        unsaved(draft, saved) ? `Your changes to Q${number} are not saved and will be lost.` : null],
       buttons: [{ label: 'Insert', value: 'insert', primary: true }, { label: 'Cancel', value: 'cancel' }],
     });
     if (choice !== 'insert') return;
     const result = api.dispatch({ type: 'insertCycle', beforeCycleId: cycleId }, {});
-    if (result.ok) api.setUi({ sub: { kind: 'cycle', cycleId: state.match.cycles[index].id, returnTo: sub.returnTo } });
-    else api.setUi({ msg: refusalText(result.error) });
+    if (result.ok) {
+      api.setUi({ sub: { kind: 'cycle', cycleId: state.match.cycles[index].id, returnTo: sub.returnTo } });
+      window.scrollTo(0, 0);
+    } else api.setUi({ msg: refusalText(result.error) });
   };
 
   const onDelete = async () => {
@@ -317,9 +413,12 @@ export function renderCycleEditor(root, state, api) {
   };
 
   const current = d.cycles[index];
+  const cancelButton = h('button', { type: 'button', class: 'btn small', id: 'ed-cancel', onclick: leave }, 'Cancel');
+  saveButton.classList.add('small');
   root.append(
-    h('div', { class: 'top' }, h('h1', { tabindex: '-1' }, `Edit Q${number}`),
-      h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn small', id: 'ed-back', onclick: back }, 'Back'))),
+    h('div', { class: 'edhead' },
+      h('div', { class: 'top' }, h('h1', { tabindex: '-1' }, `Edit Q${number}`), h('div', { class: 'acts' }, cancelButton, saveButton)),
+      strip),
     h('div', { class: 'editor' },
       current.flags.length > 0 ? h('p', { class: 'msg', id: 'ed-flags' }, `Q${current.number}: ${current.flags.map(flagText).join('; ')}.`) : null,
       state.ui.msg ? h('p', { class: 'msg' }, state.ui.msg) : null,
@@ -328,8 +427,7 @@ export function renderCycleEditor(root, state, api) {
       h('div', { class: 'card' }, field('Note', note)),
       ...cards.nodes,
       preview,
-      h('div', { class: 'row' }, saveButton, h('button', { type: 'button', class: 'btn', id: 'ed-cancel', onclick: back }, 'Cancel')),
       h('div', { class: 'row' },
-        h('button', { type: 'button', class: 'btn', id: 'ed-insert', onclick: onInsert }, 'Insert a question before'),
+        h('button', { type: 'button', class: 'btn', id: 'ed-insert', onclick: onInsert }, `Insert before Q${number}`),
         h('button', { type: 'button', class: 'btn', id: 'ed-delete', onclick: onDelete }, 'Delete this question'))));
 }

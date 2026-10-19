@@ -1,8 +1,11 @@
 // The Setup screen (spec 6.2): pick a format, check or edit its rules, name the teams and players,
 // then Start. Everything typed lives in a draft kept in state.ui.setup, so changing the format
 // never loses a name, and leaving for Home and coming back finds the form as it was. Each team has bench
-// boxes under its four seats (two to begin with, and "Add a bench player" for more): the bench names go into
-// the record as team.bench when the match starts (v2 4.1), and an empty box is ignored.
+// boxes under its four seats (two to begin with, and "Add a bench player" for more), behind its Bench button: the
+// bench names go into the record as team.bench when the match starts (v2 4.1), and an empty box is ignored.
+// Laid out to fit one window (review 19/10/2026, change 3; Tom's decision 3): the format is one dropdown in the top bar
+// with Rules and Details beside it and a one-line summary under it, then the two team cards with no labels (the seat
+// number in a gutter), then Rules and Match details (shown only when opened), and Start in a bar held at the bottom.
 
 import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset } from './presets.js';
 import { newMatch } from './engine.js';
@@ -30,7 +33,7 @@ function freshDraft() {
     rules: rulesFromPreset(DEFAULT_PRESET_ID),
     teams: [0, 1].map(() => ({ name: '', seats: ['', '', '', ''], bench: ['', ''], captain: null })),
     details: { competition: '', venue: '', round: '', reader: '', scorer: '' },
-    open: { rules: false, details: false },
+    open: { rules: false, details: false, bench: [false, false] },
   };
 }
 
@@ -260,38 +263,90 @@ export function presetUnverified(preset) {
   return preset.verified === false || /unverified/i.test(preset.source);
 }
 
-function presetList(draft, onPick) {
-  const rows = new Map();
-  const list = h('fieldset', { class: 'presets' }, h('legend', {}, 'Format'));
-  for (const preset of PRESETS) {
-    const unverified = presetUnverified(preset);
-    const input = h('input', { type: 'radio', name: 'preset', value: preset.presetId });
-    input.checked = preset.presetId === draft.presetId;
-    input.addEventListener('change', () => { if (input.checked) onPick(preset.presetId); });
-    const row = h('label', { class: input.checked ? 'preset on' : 'preset' }, input,
-      h('span', { class: 'pbody' },
-        h('span', { class: 'pname' }, preset.name, unverified ? h('span', { class: 'tag' }, 'Unverified') : null),
-        h('span', { class: 'psrc' }, preset.source)));
-    rows.set(preset.presetId, row);
-    list.append(row);
+// One line that says what a set of rules plays like, shown under the Format dropdown (review 19/10/2026, change 3), e.g.
+// "Starters 10, power 15, neg −5 · bonus 3 × 10 · 20 questions, halftime after 10". Built from the rules, not the preset,
+// so it follows any edit. A true minus sign (U+2212), middle dots and a times sign.
+const minus = n => (n < 0 ? `−${-n}` : String(n));
+const clockText = seconds => (seconds % 60 === 0 ? null : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
+
+function lengthText(rules) {
+  const parts = [];
+  const { length, unit, halftimeAfter } = rules.regulation;
+  if (length !== null) {
+    parts.push(`${length} ${unit === 'bonusRounds' ? 'bonus rounds' : 'questions'}`);
+    if (halftimeAfter !== null) parts.push(`halftime after ${halftimeAfter}`);
   }
-  return { list, mark: id => rows.forEach((row, key) => row.classList.toggle('on', key === id)) };
+  const countdown = rules.clock?.countdown;
+  if (countdown) {
+    const exact = clockText(countdown.length);
+    const minutes = countdown.length / 60;
+    if (countdown.per === 'half') parts.push(exact ? `${exact} halves` : `${minutes}-minute halves`);
+    else parts.push(exact ? `${exact} game` : `${minutes}-minute game`);
+  }
+  return parts.length ? parts.join(', ') : 'no fixed length';
 }
 
+export function rulesSummary(rules) {
+  const { tossup } = rules;
+  const negText = tossup.neg ? `neg ${minus(tossup.neg)}` : 'no neg';
+  let pieces;
+  if (rules.trivia) {
+    const { jackpot, streak, quarters } = rules.trivia;
+    pieces = [
+      `${quarters} quarters`,
+      `starters ${tossup.ten}, ${negText}`,
+      `Jackpot ${jackpot.join(', ')}`,
+      streak === null ? 'no Streak' : `Streak ${streak} an answer`,
+    ];
+  } else {
+    const starters = [`Starters ${tossup.ten}`, tossup.power !== null ? `power ${tossup.power}` : null, negText].filter(Boolean).join(', ');
+    const { parts, partValue, bounce } = rules.bonus;
+    const bonus = parts > 0 ? `bonus ${parts} × ${partValue}${bounce !== null ? ', bounce-backs' : ''}` : 'no bonuses';
+    pieces = [starters, bonus, lengthText(rules)];
+  }
+  if (presetUnverified({ verified: rules.verified, source: rules.source ?? '' })) pieces.push('Unverified');
+  return pieces.join(' · ');
+}
+
+function formatSelect(draft, onPick) {
+  const select = h('select', { id: 'format', 'aria-label': 'Format' },
+    PRESETS.map(preset => h('option', { value: preset.presetId }, preset.name)));
+  select.value = draft.presetId;
+  select.addEventListener('change', () => onPick(select.value));
+  return select;
+}
+
+// The line at the top of the Rules section: the format and where its rules come from.
+function sourceLine(rules) {
+  return [`${rules.name}: ${rules.source}`, presetUnverified({ verified: rules.verified, source: rules.source ?? '' }) ? h('span', { class: 'tag' }, 'Unverified') : null];
+}
+
+// A team card (review change 3): no labels over the boxes. Row 0 is the team name, in bold, and the Bench button; rows 1 to 4
+// are the seats, each with its number in a narrow gutter (it stays in view after a name is typed) and Captain. The Bench
+// button shows how many bench names are typed, and opens the bench boxes under the seats.
 function teamCard(draft, t, rosterId) {
   const team = draft.teams[t];
+  const side = t === 0 ? 'Left' : 'Right';
   const warning = h('p', { class: 'msg' });
   const showWarning = () => {
     warning.replaceChildren(...nearDuplicateSeats(team.seats).map(([i, j]) =>
       h('span', {}, `Seats ${i + 1} and ${j + 1} are nearly the same name ("${team.seats[i].trim()}" and "${team.seats[j].trim()}"). Check they are two different players.`, h('br'))));
   };
+  const gutter = text => h('span', { class: 'gut', 'aria-hidden': 'true' }, text);
 
   const name = h('input', {
-    id: `team${t}-name`, maxlength: 60, placeholder: `Team ${SIDE[t]}`, autocomplete: 'off', autocapitalize: 'words', spellcheck: 'false',
-    'aria-label': `${t === 0 ? 'Left' : 'Right'} team name`,
+    id: `team${t}-name`, class: 'tbold', maxlength: 60, placeholder: `Team ${SIDE[t]}`, autocomplete: 'off', autocapitalize: 'words', spellcheck: 'false',
+    'aria-label': `${side} team name`,
   });
   name.value = team.name;
   name.addEventListener('input', () => { team.name = name.value; });
+
+  team.bench ??= ['', ''];
+  draft.open.bench ??= [false, false];
+  const benchCount = () => team.bench.filter(entry => entry.trim() !== '').length;
+  const benchButton = h('button', { type: 'button', class: 'btn small', id: `team${t}-bench`, 'aria-expanded': String(draft.open.bench[t]) });
+  const showBenchCount = () => { benchButton.textContent = `Bench (${benchCount()})`; };
+  showBenchCount();
 
   const captains = [];
   const markCaptain = () => captains.forEach((button, seat) => button.setAttribute('aria-pressed', String(team.captain === seat)));
@@ -299,54 +354,71 @@ function teamCard(draft, t, rosterId) {
     const input = h('input', {
       id: `team${t}-seat${seat}`, list: rosterId, maxlength: 40, autocomplete: 'off', autocapitalize: 'words', autocorrect: 'off', spellcheck: 'false',
       placeholder: seat === 3 ? 'Leave empty if playing three' : 'Name',
-      'aria-label': `${t === 0 ? 'Left' : 'Right'} team, seat ${seat + 1}`,
+      'aria-label': `${side} team, seat ${seat + 1}`,
     });
     input.value = team.seats[seat];
     input.addEventListener('input', () => { team.seats[seat] = input.value; showWarning(); });
-    const captain = h('button', { type: 'button', class: 'btn small', 'aria-pressed': 'false', 'aria-label': `${t === 0 ? 'Left' : 'Right'} team, seat ${seat + 1} is the captain` }, 'Captain');
+    const captain = h('button', { type: 'button', class: 'btn small', 'aria-pressed': 'false', 'aria-label': `${side} team, seat ${seat + 1} is the captain` }, 'Captain');
     captain.addEventListener('click', () => { team.captain = team.captain === seat ? null : seat; markCaptain(); });
     captains.push(captain);
-    return h('div', { class: 'seatrow' }, h('label', { class: 'f' }, h('span', {}, `Seat ${seat + 1}`), input), captain);
+    return h('div', { class: 'trow' }, gutter(String(seat + 1)), input, captain);
   });
   markCaptain();
   showWarning();
 
   // The bench: a box for each name in the draft, and a button that adds another. A box is for a name only (no captain).
-  team.bench ??= ['', ''];
   const benchBox = place => {
     const input = h('input', {
       id: `team${t}-bench${place}`, list: rosterId, maxlength: 40, autocomplete: 'off', autocapitalize: 'words', autocorrect: 'off', spellcheck: 'false',
-      placeholder: 'Name', 'aria-label': `${t === 0 ? 'Left' : 'Right'} team, bench player ${place + 1}`,
+      placeholder: 'Bench player', 'aria-label': `${side} team, bench player ${place + 1}`,
     });
     input.value = team.bench[place] ?? '';
-    input.addEventListener('input', () => { team.bench[place] = input.value; });
-    return h('label', { class: 'f' }, h('span', {}, `Bench player ${place + 1}`), input);
+    input.addEventListener('input', () => { team.bench[place] = input.value; showBenchCount(); });
+    return h('div', { class: 'trow bench' }, gutter(`B${place + 1}`), input);
   };
-  const benchBoxes = team.bench.map((_, place) => benchBox(place));
   const addBench = h('button', { type: 'button', class: 'btn', id: `team${t}-add-bench` }, 'Add a bench player');
+  const benchBlock = h('div', { class: 'benchrows', id: `team${t}-benchrows` }, team.bench.map((_, place) => benchBox(place)), addBench);
+  benchBlock.hidden = !draft.open.bench[t];
   addBench.addEventListener('click', () => {
     team.bench.push('');
     const box = benchBox(team.bench.length - 1);
     addBench.before(box);
     box.querySelector('input').focus();
   });
+  benchButton.addEventListener('click', () => {
+    draft.open.bench[t] = !draft.open.bench[t];
+    benchBlock.hidden = !draft.open.bench[t];
+    benchButton.setAttribute('aria-expanded', String(draft.open.bench[t]));
+    if (draft.open.bench[t]) benchBlock.querySelector('input')?.focus();
+  });
 
-  return h('div', { class: 'card' }, h('h2', {}, t === 0 ? 'Left team' : 'Right team'),
-    h('label', { class: 'f' }, h('span', {}, 'Team name'), name), seatRows, benchBoxes, addBench, warning);
+  return h('div', { class: 'card tcard' }, h('h2', {}, `${side} team`),
+    h('div', { class: 'trow' }, gutter(''), name, benchButton), seatRows, benchBlock, warning);
 }
 
-function foldedDetails(draft) {
-  const details = h('details', { class: 'fold' }, h('summary', {}, 'Match details'),
-    h('div', { class: 'inner' }, h('div', { class: 'grid2' }, DETAIL_FIELDS.map(([key, text]) => {
-      const input = h('input', { maxlength: 80, autocomplete: 'off' });
-      input.value = draft.details[key];
-      input.addEventListener('input', () => { draft.details[key] = input.value; });
-      return h('label', { class: 'f' }, h('span', {}, text), input);
-    }))));
-  details.open = draft.open.details;
-  details.addEventListener('toggle', () => { draft.open.details = details.open; });
-  return details;
+// A section after the teams that shows only when its button in the top bar has opened it (Rules, Match details). The
+// button says whether it is open; opening it brings the section into view, and its own heading row closes it.
+function openedSection(draft, key, title, id, content, button) {
+  const section = h('details', { class: 'fold shut', id }, h('summary', {}, title), content);
+  section.open = draft.open[key];
+  const mark = () => button.setAttribute('aria-expanded', String(section.open));
+  mark();
+  section.addEventListener('toggle', () => { draft.open[key] = section.open; mark(); });
+  button.addEventListener('click', () => {
+    section.open = !section.open;
+    draft.open[key] = section.open;
+    mark();
+    if (section.open) section.scrollIntoView({ block: 'start' });
+  });
+  return section;
 }
+
+const detailsContent = draft => h('div', { class: 'inner' }, h('div', { class: 'grid2' }, DETAIL_FIELDS.map(([key, text]) => {
+  const input = h('input', { maxlength: 80, autocomplete: 'off' });
+  input.value = draft.details[key];
+  input.addEventListener('input', () => { draft.details[key] = input.value; });
+  return h('label', { class: 'f' }, h('span', {}, text), input);
+})));
 
 // What Start makes of the draft: blank team names become Team A and Team B, and a team with no
 // names typed gets seats A1 to A4 (B1 to B4), as the bare-bones page did. The bench is the names typed in its
@@ -371,18 +443,29 @@ export function renderSetup(root, state, api) {
   const rosterId = 'roster-names';
   const roster = h('datalist', { id: rosterId }, loadRoster().map(name => h('option', { value: name })));
 
+  // The summary line follows the rules as they are edited; the Rules section opens with where they come from.
+  const summary = h('p', { class: 'hint', id: 'format-summary' });
+  const source = h('p', { class: 'hint', id: 'rules-source' });
+  const showRules = () => {
+    summary.textContent = rulesSummary(draft.rules);
+    source.replaceChildren(...sourceLine(draft.rules).filter(Boolean));
+  };
   const rulesHost = h('div', {}, rulesPanel(draft.rules));
-  const rulesFold = h('details', { class: 'fold' }, h('summary', {}, 'Rules'), rulesHost);
-  rulesFold.open = draft.open.rules;
-  rulesFold.addEventListener('toggle', () => { draft.open.rules = rulesFold.open; });
+  rulesHost.addEventListener('input', showRules);
+  rulesHost.addEventListener('change', showRules);
+  showRules();
 
   // Picking another format replaces the rules, and nothing else: names and details stay.
-  const presets = presetList(draft, id => {
+  const format = formatSelect(draft, id => {
     draft.presetId = id;
     draft.rules = rulesFromPreset(id);
-    presets.mark(id);
     rulesHost.replaceChildren(rulesPanel(draft.rules));
+    showRules();
   });
+  const rulesButton = h('button', { type: 'button', class: 'btn small', id: 'setup-rules' }, 'Rules');
+  const detailsButton = h('button', { type: 'button', class: 'btn small', id: 'setup-details', 'aria-label': 'Match details' }, 'Details');
+  const rulesSection = openedSection(draft, 'rules', 'Rules', 'rules-fold', h('div', { class: 'inner' }, source, rulesHost), rulesButton);
+  const detailsSection = openedSection(draft, 'details', 'Match details', 'details-fold', detailsContent(draft), detailsButton);
 
   // Start: the typed names go to the roster, the draft becomes a match, and the page takes over.
   function startFromDraft() {
@@ -402,12 +485,12 @@ export function renderSetup(root, state, api) {
 
   const start = h('button', { type: 'button', class: 'btn primary', id: 'start-match', onclick: startFromDraft }, 'Start match');
   const form = h('form', { novalidate: true, autocomplete: 'off' },
-    h('div', { class: 'card' }, presets.list),
-    rulesFold,
-    h('div', { class: 'grid2' }, teamCard(draft, 0, rosterId), teamCard(draft, 1, rosterId)),
-    foldedDetails(draft),
-    h('div', { class: 'startbar' }, start,
-      h('p', { class: 'hint' }, 'Names are saved on this device and offered next time. A team with no names typed gets seats A1 to A4 (B1 to B4).')));
+    summary,
+    h('div', { class: 'grid2 tcards' }, teamCard(draft, 0, rosterId), teamCard(draft, 1, rosterId)),
+    rulesSection,
+    detailsSection,
+    h('div', { class: 'startbar' }, start),
+    h('p', { class: 'hint', id: 'setup-hint' }, 'Names are saved on this device for next time. A team with no names gets seats A1 to A4 (B1 to B4).'));
 
   // Only the Start button starts a match. The form never submits, so Enter or a phone keyboard's
   // Go key in a name or a rule box does nothing, and a half-typed form cannot start by accident.
@@ -415,6 +498,7 @@ export function renderSetup(root, state, api) {
 
   const back = h('button', { type: 'button', class: 'btn small', onclick: () => api.go('home') }, 'Home');
   root.append(
-    h('div', { class: 'top' }, h('h1', { tabindex: '-1' }, 'New match'), h('div', { class: 'acts' }, back)),
+    h('div', { class: 'top setuptop' }, h('h1', { tabindex: '-1' }, 'New match'),
+      h('div', { class: 'fmt' }, format, rulesButton, detailsButton), h('div', { class: 'acts' }, back)),
     form, roster);
 }
