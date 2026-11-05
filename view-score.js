@@ -685,8 +685,8 @@ async function openMenu(c) {
     case 'reverse': return api.setDisplay({ seatOrder: match.display?.seatOrder === 'desc' ? 'asc' : 'desc' });
     case 'rules': return api.setUi({ sub: { kind: 'rules' }, selected: null });
     case 'sheet': return api.go('sheet');
-    case 'print': return api.go('sheet', { action: 'print' });
-    case 'files': return api.go('sheet', { action: 'files' });
+    case 'print': case 'files': return api.go('sheet', { action: choice });
+    case 'send': return api.sendMatch();
     case 'board': return openBoard(now);
     case 'end': return endMatchFlow(now);
     case 'home': return api.go('home');

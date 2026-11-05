@@ -73,6 +73,20 @@ export function numberBox(value, onChange, attrs = {}) {
   return input;
 }
 
+// ---- The browser ------------------------------------------------------------------------------
+
+function isStandalone() {
+  return navigator.standalone === true || globalThis.matchMedia?.('(display-mode: standalone)').matches === true;
+}
+
+// A browser tab on an iPhone or iPad running Safari, not a scorer already added to the home screen. Such a tab keeps its
+// saved matches apart from the home-screen Skor's, and Safari clears them after seven days unused.
+export function isIosSafariTab() {
+  const ua = navigator.userAgent;
+  const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  return ios && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua) && !isStandalone();
+}
+
 // ---- The clipboard ---------------------------------------------------------------------------
 
 // Puts `text` on the clipboard. Where the browser will not take it, `box` (a text box, or any element, showing the same text)
@@ -86,7 +100,7 @@ export async function copyText(text, box = null) {
     if (!box) return false;
     box.hidden = false;
     box.focus();
-    if (typeof box.select === 'function') box.select();
+    if (typeof box.select === 'function') { box.select(); box.setSelectionRange?.(0, box.value.length); }   // the iPhone selects a box only by range
     else window.getSelection?.()?.selectAllChildren(box);
     try { return document.execCommand('copy'); } catch { return false; }
   }

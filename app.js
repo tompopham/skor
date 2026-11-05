@@ -9,7 +9,9 @@ import {
 } from './storage.js';
 import { offerFile, resultLine, fileName } from './files.js';
 import { h, newId } from './dom.js';
-import { isLive } from './view-common.js';
+import { isLive, isIosSafariTab } from './view-common.js';
+import { isMatchLink, readLink } from './link.js';
+import { sendDialog, offerLink, showSent, askToSave } from './view-send.js';
 import { renderSetup } from './view-setup.js';
 import { renderScore } from './view-score.js';
 import { stopClockTicker } from './view-banners.js';
@@ -24,10 +26,14 @@ import { VERSION } from './version.js';
 // uses to ignore taps just after it opens. state.subClosedAt: when the cycle editor or Edit rules last closed, so a quick
 // double tap on its Cancel or Save cannot land on Undo, Redo or Menu underneath. state.foreign: another tab has saved this match.
 // state.viewOnly: the match is open only to look at in Past matches (R34), so the room board is not told
-// about it unless it is also the match in progress. START is the page's first screen: the room board when
-// the address ends in #board (the scorer's Room board menu item opens a window like that), otherwise Home.
+// about it unless it is also the match in progress. state.peek: the match is a sent one that Just look opened (SPEC-partB
+// 1.4); it is not saved here, so nothing may change it until it is. START is the page's first screen: the room board when
+// the address ends in #board (the scorer's Room board menu item opens a window like that), otherwise Home. SENT is a sent
+// match's link the page was opened with (SPEC-partB 1.3); its # part leaves the address as the page opens (below), so
+// neither back, forward nor a reload offers the match twice, and the match is held here until the person chooses.
 const START = location.hash === '#board' ? 'board' : 'home';
-const state = { screen: START, match: null, history: null, ui: {}, enteredAt: 0, subClosedAt: null, foreign: false, viewOnly: false };
+const SENT = isMatchLink(location.hash) ? location.href : null;
+const state = { screen: START, match: null, history: null, ui: {}, enteredAt: 0, subClosedAt: null, foreign: false, viewOnly: false, peek: false };
 const noteSubClose = patch => { if (state.ui.sub && patch && 'sub' in patch && !patch.sub) state.subClosedAt = performance.now(); };
 const KEEP_UI = ['setup'];
 
@@ -42,7 +48,8 @@ const VIEWS = { home: renderHome, setup: renderSetup, score: renderScore, sheet:
 
 const api = {
   go, back, dispatch, dispatchAll, startMatch, setUi, closeSub, ask, undo, redo, setDisplay, editCycle,
-  keepAwake, wakeStatus, offerBackup, viewMatch, resumeSaved, deleteSaved, updateReady, applyUpdate, now,
+  keepAwake, wakeStatus, offerBackup, viewMatch, resumeSaved, deleteSaved, updateReady, applyUpdate, now, lookAt, askForPersistentStorage,
+  sendMatch: () => sendDialog(state.match, api),
 };
 
 // The time every action is stamped with, and every clock on screen is worked out from: milliseconds since
@@ -137,6 +144,7 @@ function openMatch(match, announce = true) {
   state.history = createHistory(state.match);
   state.viewOnly = !announce;
   state.foreign = false;
+  state.peek = false;
   save.safeAt = state.match.cycles.length;
   save.backupError = null;
   if (announce) broadcast();
@@ -216,7 +224,7 @@ function sendToBoard(match) {
 
 // The board follows the match in progress and nothing else (R34): a match opened only to look at in Past
 // matches is not sent, unless it is also the match in progress.
-const boardFollows = () => state.match !== null && (!state.viewOnly || state.match.id === getCurrent());
+const boardFollows = () => state.match !== null && !state.peek && (!state.viewOnly || state.match.id === getCurrent());
 
 function broadcast() {
   if (boardFollows()) sendToBoard(state.match);
@@ -245,11 +253,14 @@ function startMatch(match) {
   go('score');
 }
 
+// Whether `match` is the very version already open here, with its undo history (a match Just look opened has none worth keeping).
+const inMemory = match => state.history && !state.foreign && !state.peek && sameVersion(state.match, match);
+
 // Resume, and a backup file that is already saved here: the stored copy becomes the match in progress. When it is the very
 // version already in memory (Home, then Resume: nothing can have changed it in between), the one in memory stays, with its
 // undo history, so Undo still works after a trip to Home (review 19/10/2026). Otherwise it is opened afresh.
 function resumeMatch(match) {
-  if (state.history && !state.foreign && sameVersion(state.match, match)) {
+  if (inMemory(match)) {
     state.viewOnly = false;
     save.safeAt = state.match.cycles.length;
     save.backupError = null;
@@ -279,6 +290,7 @@ function commit(match) {
 function dispatchAll(actions, uiPatch = {}) {
   if (!state.match) return { ok: false, error: new Error('There is no match open') };
   if (state.foreign) return { ok: false, error: new Error('This match changed in another tab. Reload it before scoring.') };
+  if (state.peek) { askToSave(state.match, api); return { ok: false, error: new Error(PEEKING) }; }
   let next = state.match;
   try {
     for (const action of actions) next = applyAction(next, action, now());
@@ -293,6 +305,8 @@ function dispatchAll(actions, uiPatch = {}) {
   return { ok: true };
 }
 
+const PEEKING = 'This match is not saved on this device. Save it to your matches to change it.';
+
 function dispatch(action, uiPatch) {
   return dispatchAll([action], uiPatch);
 }
@@ -301,7 +315,7 @@ function dispatch(action, uiPatch) {
 // last one saved here, so a rev never repeats with different content (R27). The display settings
 // are not part of the history, so they stay as they are now.
 function stepHistory(step) {
-  if (!state.match || state.foreign) return false;
+  if (!state.match || state.foreign || state.peek) return false;
   const restored = step();
   if (!restored) return false;
   Object.assign(state.ui, { msg: '', hint: null, selected: null, streakN: 0 });
@@ -318,13 +332,14 @@ function redo() {
 // Swap sides and Reverse seat order. Display settings never change the scores, so they are saved
 // as a change but are not a version to undo.
 function setDisplay(patch) {
-  if (!state.match || state.foreign) return;
+  if (!state.match || state.foreign || state.peek) return;
   commit({ ...state.match, display: { ...state.match.display, ...patch }, rev: state.match.rev + 1, changedAt: now() });
 }
 
 // Opens the cycle editor (spec 6.4) on one cycle. The scoresheet passes the screen to come back to
-// when the editor is left ('sheet'); with none, it returns to scoring.
+// when the editor is left ('sheet'); with none, it returns to scoring. A match Just look opened is offered to be saved first.
 function editCycle(cycleId, returnTo = null) {
+  if (state.peek) return askToSave(state.match, api);
   go('score', { sub: { kind: 'cycle', cycleId, returnTo } });
 }
 
@@ -339,10 +354,16 @@ const UNREADABLE = 'That match cannot be read. It may be damaged; Delete or Remo
 function viewMatch(id) {
   const match = loadMatch(id);
   if (!match) return { ok: false, error: UNREADABLE };
-  if (state.history && !state.foreign && sameVersion(state.match, match)) state.viewOnly = true;
+  if (inMemory(match)) state.viewOnly = true;
   else openMatch(match, false);
   go('sheet');
   return { ok: true };
+}
+// Just look (SPEC-partB 1.4): a sent match opens on its scoresheet without being saved here, so nothing may change it.
+function lookAt(match) {
+  openMatch(match, false);
+  state.peek = true;
+  go('sheet', { fmsg: { text: 'Just looking: this match is not saved on this device.' } });
 }
 function resumeSaved(id) {
   const match = loadMatch(id);
@@ -365,9 +386,10 @@ function deleteSaved(id) {
 
 // A saved copy of this match with a higher rev than the one last saved here means another tab has
 // been saving it. That tab and this one would write over each other, so this one stops. Only the
-// screens that show the match are stopped: Resume on Home opens the saved copy afresh, as it is then another version.
+// screens that show the match are stopped: Resume on Home opens the saved copy afresh, as it is then another version. A match
+// Just look opened is not saved here, so a saved copy of it is no other tab's.
 function checkForeign() {
-  if (!state.match || state.foreign || !MATCH_SCREENS.includes(state.screen)) return;
+  if (!state.match || state.foreign || state.peek || !MATCH_SCREENS.includes(state.screen)) return;
   const stored = loadMatch(state.match.id);
   if (!stored) return;
   const newer = detectForeignChange(state.match.rev, stored)
@@ -551,7 +573,7 @@ function onBack(event) {
 
 window.addEventListener('popstate', onBack);
 try {
-  history.replaceState(entry(START), '');          // the page's first entry: not pushed, so back from Home leaves
+  history.replaceState(entry(START), '', SENT ? `${location.pathname}${location.search}` : undefined);   // the page's first entry: not pushed, so back from Home leaves
 } catch {
   // As above.
 }
@@ -559,8 +581,20 @@ try {
 // The address changed to end in #board in a page that is already open: a board window reused by the menu's
 // Room board after Back took it Home, or the address typed. A change of only the #fragment loads nothing, so the
 // page loads itself again, and a page that opens at #board opens on the board. (Leaving the board drops the
-// #board from its entry, so going back through history never lands on an address that would do this.)
-window.addEventListener('hashchange', () => { if (location.hash === '#board' && state.screen !== 'board') location.reload(); });
+// #board from its entry, so going back through history never lands on an address that would do this.) A sent match's
+// link opened in this tab is offered where the page stands, with no reload, so a question half entered or a match this
+// device could not save is not lost: its # part leaves the new entry the browser made for it, which becomes this screen's.
+window.addEventListener('hashchange', () => {
+  if (location.hash === '#board' && state.screen !== 'board') { location.reload(); return; }
+  if (!isMatchLink(location.hash)) return;
+  const link = location.href;
+  try {
+    history.replaceState(entry(state.screen), '', `${location.pathname}${location.search}`);
+  } catch {
+    // The address keeps it; the match is offered all the same.
+  }
+  offerLink(link, api);
+});
 
 // Leaving the room board for another screen: the address loses its #board, on the entry it is in.
 function leaveBoardAddress() {
@@ -585,7 +619,7 @@ function leaveBoardAddress() {
 // A tap in the first 350 ms after a dialog opens is ignored (review 19/10/2026, change 2): the second tap of a quick
 // double tap on the button that opened it would otherwise land on whatever button is under the finger. Only a pointer's
 // click counts (event.detail > 0), so Enter and Space, and a click made by the page itself, are never held back.
-const FIELDS = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)';
+const FIELDS = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled):not([hidden])';   // a hidden box (Send match's link) takes no focus
 const DIALOG_GUARD_MS = 350;
 const openAsks = [];   // the dialogs showing, newest last: each is the function that closes it with a value
 function ask({ title, body = [], buttons = [], head = false, back = null, menu = false }) {
@@ -655,7 +689,7 @@ function ask({ title, body = [], buttons = [], head = false, back = null, menu =
     document.body.append(dialog);
     // preventScroll: the dialog opens at its top. A long one (the menu) would otherwise scroll down to its Close button,
     // hiding the items at the top, which are the ones wanted mid-match (Start clock, Timeout).
-    (dialog.querySelector('input:not(:disabled), select:not(:disabled), textarea:not(:disabled)') ?? dialog.querySelector('[data-value="cancel"]') ?? choices[0])?.focus({ preventScroll: true });
+    (dialog.querySelector('input:not(:disabled), select:not(:disabled), textarea:not(:disabled):not([hidden])') ?? dialog.querySelector('[data-value="cancel"]') ?? choices[0])?.focus({ preventScroll: true });
   });
 }
 
@@ -745,17 +779,6 @@ else window.addEventListener('load', registerWorker);
 
 // ---- Home (spec 6.1) -----------------------------------------------------------------------
 
-function isStandalone() {
-  return navigator.standalone === true || globalThis.matchMedia?.('(display-mode: standalone)').matches === true;
-}
-
-// A browser tab on an iPhone or iPad running Safari, not a scorer already added to the home screen.
-function isIosSafariTab() {
-  const ua = navigator.userAgent;
-  const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  return ios && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua) && !isStandalone();
-}
-
 // A backup file's text becomes the match in progress. A match with the same id already saved here
 // is compared by mergeDecision (spec 7): nothing is overwritten until the person chooses.
 function openBackupText(text) {
@@ -782,24 +805,31 @@ async function openBackupFile(file) {
 
 // Load backup, pasted: the backup's text goes in a box in a dialog (so the phone's back gesture closes
 // it). Text that is not a backup is explained in the dialog, which stays open with the text still in it;
-// text that is one carries on exactly as a file does, including the replace or keep both choice.
+// text that is one carries on exactly as a file does, including the replace or keep both choice. A sent match's link
+// (SPEC-partB 1.4: how a match opened in Safari reaches the home-screen Skor) is read as the link would be, and offered.
 async function pasteBackup() {
   let text = '';
   let error = '';
   for (;;) {
     const box = h('textarea', {
       id: 'paste-box', rows: '8', spellcheck: 'false', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off',
-      placeholder: 'Paste the whole text of a backup file here', 'aria-label': 'Backup text',
+      placeholder: 'Paste the whole text of a backup file, or a Skor link, here', 'aria-label': 'Backup text',
     });
     box.value = text;
     const choice = await ask({
       title: 'Paste backup text',
-      body: ['Open the backup file in any app that shows text, copy all of it, and paste it here.',
+      body: ['Open the backup file in any app that shows text, copy all of it, and paste it here. A Skor link works too.',
         error ? h('p', { class: 'msg', id: 'paste-error' }, error) : null, box].filter(Boolean),
       buttons: [{ label: 'Load this backup', value: 'load', primary: true }, { label: 'Cancel', value: 'cancel' }],
     });
     if (choice !== 'load') return;
     text = box.value;
+    if (isMatchLink(text) && !text.trim().startsWith('{')) {
+      const sent = await readLink(text);
+      if (sent.ok) return showSent(sent.match, sent.link, api);
+      error = sent.error;
+      continue;
+    }
     const read = parseBackup(text);
     if (read.ok) {
       setUi({ loadError: null }, false);
@@ -865,3 +895,4 @@ function renderHome(root, state) {
 }
 
 render();
+if (SENT) offerLink(SENT, api);

@@ -1,5 +1,5 @@
 // The scoring screen's menu in two levels (review 19/10/2026, change 2; Tom's decision 2). Menu holds the eleven
-// buttons used mid-match, in three groups; More holds the other nine. Each panel has a fixed header with its title and
+// buttons used mid-match, in three groups; More holds the other ten (Send match, SPEC-partB 1.2, last, on a row of its own). Each panel has a fixed header with its title and
 // Close (and, on More, a Menu button back). A greyed button keeps its label and says why on a second line, and a
 // Timeout names its team in full on its second line, so two long names never read the same. The two settings in More
 // switch in place and show their state, without closing the panel. menuModel() is pure, for the tests; showMenu()
@@ -55,7 +55,8 @@ export function menuModel(match, d, { keysOn, namesHidden, updateReady }) {
       { value: 'rules', label: 'Edit rules' },
       { value: 'print', label: 'Print' },
       { value: 'files', label: 'Save files' },
-      { value: 'home', label: 'Home' }),
+      { value: 'home', label: 'Home' },
+      { value: 'send', label: 'Send match', full: true }),
   ];
   return { menu, more };
 }

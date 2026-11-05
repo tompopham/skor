@@ -5,6 +5,7 @@
 // From version 1.6.0 (review 19/10/2026, changes 6 and 7): the sheet comes first, with the file actions behind one
 // Print or save button; where the question grid is wider than the window it shows as a list built from the same match
 // (files.js sheetRows), while print and the saved file keep the grid; and after the editor the edited row is brought back.
+// From 1.7.0 (SPEC-partB 1.2): Send match is the sixth file action, and Past matches tags a copy a sent match replaced.
 
 import { derive } from './engine.js';
 import { toScoresheetHTML, toCSV, resultLine, fileName, offerFile, sheetRows } from './files.js';
@@ -12,6 +13,7 @@ import { listMatchesReport, loadMatch, getCurrent } from './storage.js';
 import { h } from './dom.js';
 import { ensureStyles, refusalText, isLive, fmt } from './view-common.js';
 import { protestControls } from './view-protest.js';
+import { keptTag } from './view-send.js';
 
 // ---- Style -----------------------------------------------------------------------------------
 // The tables come with the class names the saved file uses (.seat, .notes, .num ...). Two of them
@@ -233,7 +235,7 @@ function rowAt(index) {
   return rows[Math.min(index, rows.length - 1)]?.querySelector('.rowbtn') ?? null;
 }
 
-// The five file actions, behind Print or save (review change 6). Each runs inside its own button's click, so iPhone Safari
+// The six file actions, behind Print or save (review change 6). Each runs inside its own button's click, so iPhone Safari
 // still lets it share, download or copy; the dialog closes first. What happened is said in the line under the heading.
 function fileActions(state, api, say) {
   const report = (file, result) => {
@@ -284,6 +286,7 @@ function fileActions(state, api, say) {
     ['csv', 'Save CSV', save('csv', 'text/csv;charset=utf-8', toCSV)],
     ['backup', 'Save backup', saveBackup],
     ['copy', 'Copy result line', copyLine],
+    ['send', 'Send match', () => api.sendMatch()],
   ];
 }
 
@@ -364,7 +367,7 @@ export function renderSheet(root, state, api) {
 function describe(entry) {
   const match = loadMatch(entry.id);
   if (match) {
-    return { id: entry.id, damaged: false, live: isLive(match), line: resultLine(match, derive(match)), started: dateOf(match.createdAt), changed: dateOf(match.changedAt, true) };
+    return { id: entry.id, damaged: false, live: isLive(match), kept: keptTag(match), line: resultLine(match, derive(match)), started: dateOf(match.createdAt), changed: dateOf(match.changedAt, true) };
   }
   const names = (Array.isArray(entry.teams) ? entry.teams : []).map(name => String(name ?? '').trim());
   return {
@@ -405,7 +408,8 @@ export function renderPast(root, state, api) {
     ? h('p', { class: 'hint', id: 'past-empty' }, 'No matches are saved on this device yet.')
     : h('div', { class: 'pastlist', id: 'past-list' }, items.map(item => h('div', { class: item.damaged ? 'card past damaged' : 'card past', 'data-id': item.id },
       // Tagged In progress only while it is the match in progress and has not ended (review change 10).
-      h('div', { class: 'ptop' }, h('b', { class: 'pline' }, item.line), item.id === current && item.live ? h('span', { class: 'tag' }, 'In progress') : null),
+      h('div', { class: 'ptop' }, h('b', { class: 'pline' }, item.line), item.id === current && item.live ? h('span', { class: 'tag' }, 'In progress') : null,
+        item.kept ? h('span', { class: 'tag' }, item.kept) : null),
       h('span', { class: 'hint' }, [item.started ? `Started ${item.started}` : '', item.changed ? `last changed ${item.changed}` : ''].filter(Boolean).join(' · ')),
       item.damaged ? h('span', { class: 'msg' }, 'This saved match is damaged and cannot be opened.') : null,
       h('div', { class: 'row' },
