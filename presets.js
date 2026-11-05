@@ -172,3 +172,8 @@ export function rulesFromPreset(id) {
   if (!preset) throw new Error(`Unknown preset: ${id}`);
   return structuredClone(preset);
 }
+
+// A preset is tagged "Unverified" when it has no primary source or its source says a rule is unverified.
+export function presetUnverified(preset) {
+  return preset.verified === false || /unverified/i.test(preset.source);
+}

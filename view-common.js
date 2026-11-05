@@ -1,7 +1,7 @@
 // What the scoring screen and the editors share: how names, scores and refusals are worded, the small
 // form controls, and the trivia format list. Nothing here touches the match or the app's state.
 
-import { FORMATS } from './engine.js';
+import { FORMATS, derive } from './engine.js';
 import { h } from './dom.js';
 
 // ---- Words and numbers -----------------------------------------------------------------------
@@ -11,6 +11,9 @@ export const fmt = number => (number < 0 ? `${MINUS}${-number}` : String(number)
 export const teamName = (match, team) => String(match.teams[team].name ?? '').trim() || `Team ${'AB'[team]}`;
 export const seatName = (match, team, seat) => String(match.teams[team].seats[seat] ?? '').trim();
 export const isCorrect = buzz => buzz.result === 'power' || buzz.result === 'ten';
+// A match still being played: one that is there and has not ended. Home offers Resume only for such a match, and Past
+// matches tags only it "In progress" (review 19/10/2026, change 10).
+export const isLive = match => Boolean(match) && !derive(match).phase.ended;
 // The team shown on the left, then the one on the right.
 export const leftRight = match => (match.display?.leftTeam === 1 ? [1, 0] : [0, 1]);
 // The most answers a Streak turn can be given: the scoring screen's counter and the editor's box stop here.
@@ -40,6 +43,9 @@ export function refusalText(error) {
 export const triviaFormats = rules => Object.keys(FORMATS)
   .filter(key => key !== 'streak' || rules.trivia.streak != null)
   .map(key => [key, FORMATS[key]]);
+// The same, worded for the scoring screen's Format box, whose closed text then names itself: "Format: Normal" (review change
+// 11), so it needs no label beside it on a phone.
+export const formatOptions = rules => triviaFormats(rules).map(([key, label]) => [key, `Format: ${label}`]);
 
 // ---- Small form controls ---------------------------------------------------------------------
 
@@ -69,9 +75,9 @@ export function numberBox(value, onChange, attrs = {}) {
 
 // ---- The clipboard ---------------------------------------------------------------------------
 
-// Puts `text` on the clipboard. Where the browser will not take it, `box` (a text box showing the same text) is brought
-// into view, selected and copied the old way, which still works where the clipboard is shut. Resolves whether it worked;
-// when it did not, the box is left showing and selected, for the person to copy by hand.
+// Puts `text` on the clipboard. Where the browser will not take it, `box` (a text box, or any element, showing the same text)
+// is brought into view, selected and copied the old way, which still works where the clipboard is shut. Resolves whether it
+// worked; when it did not, the box is left showing and selected, for the person to copy by hand.
 export async function copyText(text, box = null) {
   try {
     await navigator.clipboard.writeText(text);
@@ -80,7 +86,8 @@ export async function copyText(text, box = null) {
     if (!box) return false;
     box.hidden = false;
     box.focus();
-    box.select?.();
+    if (typeof box.select === 'function') box.select();
+    else window.getSelection?.()?.selectAllChildren(box);
     try { return document.execCommand('copy'); } catch { return false; }
   }
 }

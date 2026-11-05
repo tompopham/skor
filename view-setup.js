@@ -5,22 +5,16 @@
 // bench names go into the record as team.bench when the match starts (v2 4.1), and an empty box is ignored.
 // Laid out to fit one window (review 19/10/2026, change 3; Tom's decision 3): the format is one dropdown in the top bar
 // with Rules and Details beside it and a one-line summary under it, then the two team cards with no labels (the seat
-// number in a gutter), then Rules and Match details (shown only when opened), and Start in a bar held at the bottom.
+// number in a gutter), then Match details (shown only when opened), and Start in a bar held at the bottom. Rules opens the
+// Rules screen (view-rules.js; review change 13, Tom's decision 7), which edits the draft's rules and comes back here.
 
-import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset } from './presets.js';
+import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset, presetUnverified } from './presets.js';
 import { newMatch } from './engine.js';
-import { defaultClockRules } from './clock.js';
 import { loadRoster, saveRoster } from './storage.js';
 import { h, newId } from './dom.js';
+import { renderRulesScreen } from './view-rules.js';
 
 // ---- Small helpers -------------------------------------------------------------------------
-
-const getAt = (object, path) => path.split('.').reduce((o, key) => o?.[key], object);
-function setAt(object, path, value) {
-  const keys = path.split('.');
-  const last = keys.pop();
-  keys.reduce((o, key) => o[key], object)[last] = value;
-}
 
 const SIDE = ['A', 'B'];
 const DETAIL_FIELDS = [
@@ -33,7 +27,7 @@ function freshDraft() {
     rules: rulesFromPreset(DEFAULT_PRESET_ID),
     teams: [0, 1].map(() => ({ name: '', seats: ['', '', '', ''], bench: ['', ''], captain: null })),
     details: { competition: '', venue: '', round: '', reader: '', scorer: '' },
-    open: { rules: false, details: false, bench: [false, false] },
+    open: { details: false, bench: [false, false] },
   };
 }
 
@@ -68,200 +62,10 @@ export function nearDuplicateSeats(seats) {
   return pairs;
 }
 
-// ---- Rule inputs ---------------------------------------------------------------------------
-
-// A whole-number input. `read()` gives the number to show, `write(n)` takes each valid number as it
-// is typed. With `neg`, a positive number typed is kept as its negative: a neg is always a loss, and
-// a phone's number pad has no minus sign to hand.
-function numberInput({ read, write, min = 0, max = 1000, neg = false, label }) {
-  const input = h('input', { type: 'number', step: '1', min: neg ? -max : min, max: neg ? 0 : max, 'aria-label': label });
-  input.value = read();
-  input.addEventListener('input', () => {
-    const value = input.valueAsNumber;
-    if (!Number.isInteger(value)) return;
-    const kept = neg && value > 0 ? -value : value;
-    if (kept >= (neg ? -max : min) && kept <= (neg ? 0 : max)) write(kept);
-  });
-  // Leaving the box shows what is actually kept, so an empty or refused entry cannot mislead.
-  input.addEventListener('change', () => { input.value = read(); });
-  return input;
-}
-
-const pathNumber = (rules, path, options = {}) => numberInput({
-  read: () => getAt(rules, path),
-  write: value => setAt(rules, path, value),
-  ...options,
-});
-
-function numberField(rules, text, path, options = {}) {
-  return h('label', { class: 'f' }, h('span', {}, text), pathNumber(rules, path, { ...options, label: text }));
-}
-
-// A tick box on a row of its own across the grid.
-function checkField(rules, text, path, onChange) {
-  const box = h('input', { type: 'checkbox' });
-  box.checked = Boolean(getAt(rules, path));
-  box.addEventListener('change', () => { setAt(rules, path, box.checked); onChange?.(box.checked); });
-  return h('label', { class: 'chk wide' }, box, h('span', {}, text));
-}
-
-function selectField(rules, text, path, options) {
-  const select = h('select', {}, options.map(([value, name]) => h('option', { value }, name)));
-  select.value = getAt(rules, path);
-  select.addEventListener('change', () => setAt(rules, path, select.value));
-  return h('label', { class: 'f' }, h('span', {}, text), select);
-}
-
-// A value that can be switched off (stored as null): a tick box and a number beside it.
-function optionalNumber(rules, text, path, fallback, options = {}) {
-  let memo = getAt(rules, path) ?? fallback;
-  const box = h('input', { type: 'checkbox' });
-  box.checked = getAt(rules, path) !== null;
-  const number = numberInput({
-    read: () => memo,
-    write: value => { memo = value; if (box.checked) setAt(rules, path, value); },
-    label: `${text}: value`,
-    ...options,
-  });
-  number.disabled = !box.checked;
-  box.addEventListener('change', () => {
-    number.disabled = !box.checked;
-    setAt(rules, path, box.checked ? memo : null);
-  });
-  return h('div', { class: 'optnum' }, h('label', { class: 'chk' }, box, h('span', {}, text)), number);
-}
-
-// Bounce-backs: off, the same value as a part, or a fixed value.
-function bounceField(rules) {
-  let memo = typeof rules.bonus.bounce === 'number' ? rules.bonus.bounce : 5;
-  const mode = rules.bonus.bounce === null ? 'off' : rules.bonus.bounce === 'same' ? 'same' : 'fixed';
-  const select = h('select', {}, [['off', 'Off'], ['same', 'Same value as a part'], ['fixed', 'A fixed value']]
-    .map(([value, name]) => h('option', { value }, name)));
-  select.value = mode;
-  const number = numberInput({
-    read: () => memo,
-    write: value => { memo = value; if (select.value === 'fixed') rules.bonus.bounce = value; },
-    min: 1,
-    label: 'Bounce-back value',
-  });
-  number.disabled = mode !== 'fixed';
-  select.addEventListener('change', () => {
-    number.disabled = select.value !== 'fixed';
-    rules.bonus.bounce = select.value === 'off' ? null : select.value === 'same' ? 'same' : memo;
-  });
-  return h('div', { class: 'optnum' }, h('label', { class: 'f' }, h('span', {}, 'Bounce-backs'), select), number);
-}
-
-const group = (title, ...fields) => h('section', { class: 'group' }, h('h3', {}, title), h('div', { class: 'grid2' }, fields));
-
-// Clock and timeouts (v2 3.1), written into `rules.clock`: a countdown that is off or a number of whole
-// minutes for a half or the whole game, the timeouts a team may take (a number, or no limit) and how long
-// one lasts. A record from before version 2 has no clock rules, so the defaults are put in first. The boxes
-// of a switched-off value keep what they last showed, so ticking a box back on gives that back
-// (11 minutes a half, 1 timeout, until something else is typed).
-function clockFields(rules) {
-  rules.clock = { ...defaultClockRules(), ...rules.clock };
-  const { clock } = rules;
-  const memo = { minutes: clock.countdown ? Math.round(clock.countdown.length / 60) : 11, per: clock.countdown?.per ?? 'half', limit: clock.timeoutsPerTeam ?? 1 };
-
-  const countdownBox = h('input', { type: 'checkbox', 'aria-label': 'Countdown on' });
-  countdownBox.checked = clock.countdown !== null;
-  const minutes = numberInput({
-    read: () => memo.minutes, write: value => { memo.minutes = value; if (clock.countdown) clock.countdown.length = value * 60; },
-    min: 1, max: 600, label: 'Countdown length in minutes',
-  });
-  const per = h('select', { 'aria-label': 'Countdown is for' }, [['half', 'A half'], ['game', 'A game']].map(([value, name]) => h('option', { value }, name)));
-  per.value = memo.per;
-  per.addEventListener('change', () => { memo.per = per.value; if (clock.countdown) clock.countdown.per = per.value; });
-  const countdownOff = () => { minutes.disabled = !countdownBox.checked; per.disabled = !countdownBox.checked; };
-  countdownOff();
-  countdownBox.addEventListener('change', () => {
-    clock.countdown = countdownBox.checked ? { length: memo.minutes * 60, per: memo.per } : null;
-    countdownOff();
-  });
-
-  const noLimit = h('input', { type: 'checkbox', 'aria-label': 'No limit on timeouts' });
-  noLimit.checked = clock.timeoutsPerTeam === null;
-  const limit = numberInput({
-    read: () => memo.limit, write: value => { memo.limit = value; if (!noLimit.checked) clock.timeoutsPerTeam = value; },
-    min: 0, max: 20, label: 'Timeouts a team',
-  });
-  limit.disabled = noLimit.checked;
-  noLimit.addEventListener('change', () => {
-    limit.disabled = noLimit.checked;
-    clock.timeoutsPerTeam = noLimit.checked ? null : memo.limit;
-  });
-
-  return group('Clock and timeouts',
-    h('div', { class: 'optnum' }, h('label', { class: 'chk' }, countdownBox, h('span', {}, 'Countdown (minutes)')), minutes),
-    h('label', { class: 'f' }, h('span', {}, 'Countdown is for'), per),
-    h('label', { class: 'f' }, h('span', {}, 'Timeouts a team'), limit),
-    h('label', { class: 'chk' }, noLimit, h('span', {}, 'No limit')),
-    h('label', { class: 'f' }, h('span', {}, 'Timeout length (seconds)'),
-      pathNumber(rules, 'clock.timeoutSeconds', { min: 1, max: 600, label: 'Timeout length in seconds' })));
-}
-
-// Every value of the rules as an input (spec 5, "the values a preset holds"), plus the trivia
-// values for Consensus and GradWrite (spec 5.1). Edits go straight into `rules`.
-export function rulesPanel(rules) {
-  const panels = [];
-
-  const musicNeg = pathNumber(rules, 'starterTypes.musicNeg', { neg: true, label: 'Music starter neg' });
-  const pictureNeg = pathNumber(rules, 'starterTypes.pictureNeg', { neg: true, label: 'Picture starter neg' });
-  const typesOff = () => { musicNeg.disabled = !rules.starterTypes.on; pictureNeg.disabled = !rules.starterTypes.on; };
-  typesOff();
-  panels.push(group('Starters',
-    numberField(rules, 'Starter value', 'tossup.ten', { min: 1, max: 100 }),
-    optionalNumber(rules, 'Powers', 'tossup.power', 15, { min: 1, max: 100 }),
-    numberField(rules, 'Neg: first team, wrong interruption', 'tossup.neg', { neg: true, max: 100 }),
-    numberField(rules, 'Neg: second team, wrong interruption', 'tossup.secondNeg', { neg: true, max: 100 }),
-    checkField(rules, 'Picture and music starters', 'starterTypes.on', typesOff),
-    h('label', { class: 'f' }, h('span', {}, 'Music starter neg'), musicNeg),
-    h('label', { class: 'f' }, h('span', {}, 'Picture starter neg'), pictureNeg)));
-
-  if (!rules.trivia) {
-    panels.push(group('Bonuses',
-      numberField(rules, 'Parts in a bonus', 'bonus.parts', { min: 1, max: 6 }),
-      numberField(rules, 'Points a part', 'bonus.partValue', { min: 1, max: 100 }),
-      checkField(rules, 'Pass rest allowed', 'bonus.passRest'),
-      bounceField(rules),
-      numberField(rules, 'Sweep reward (all parts got)', 'bonus.reward', { max: 100 }),
-      selectField(rules, 'Bonus numbering', 'bonus.numbering', [['nextUnused', 'Next unused'], ['paired', 'Paired with the starter']]),
-      checkField(rules, 'Held bonus sets for dead picture and music starters', 'bonus.heldSets')));
-  }
-
-  panels.push(group('Length of the match',
-    optionalNumber(rules, 'Fixed length', 'regulation.length', 20, { min: 1 }),
-    selectField(rules, 'Length counts', 'regulation.unit', [['cycles', 'Starters (cycles)'], ['bonusRounds', 'Bonus rounds']]),
-    optionalNumber(rules, 'Halftime after', 'regulation.halftimeAfter', 10, { min: 1 }),
-    optionalNumber(rules, 'Lightning round after (bonus rounds)', 'lightningAfter', 25, { min: 1 }),
-    selectField(rules, 'Overtime', 'overtime', [['suddenDeath', 'Sudden death'], ['threeThenSuddenDeath', 'Three starters, then sudden death'], ['none', 'None: a tie stands']]),
-    selectField(rules, 'When time is called', 'atTime', [['finishCycle', 'Finish the cycle'], ['stopNow', 'Stop at once'], ['buzzMayAnswer', 'A buzz already in may answer']]),
-    checkField(rules, 'Mark overtime results (ET)', 'etLabel')));
-
-  panels.push(clockFields(rules));
-
-  if (rules.trivia) {
-    const jackpot = h('div', { class: 'four' }, [0, 1, 2, 3].map(clue =>
-      h('label', { class: 'f' }, h('span', {}, `Jackpot clue ${clue + 1}`),
-        pathNumber(rules, `trivia.jackpot.${clue}`, { max: 1000, label: `Jackpot clue ${clue + 1}` }))));
-    panels.push(h('section', { class: 'group' }, h('h3', {}, 'Trivia formats'), jackpot,
-      h('div', { class: 'grid2' },
-        optionalNumber(rules, 'Streak (points an answer)', 'trivia.streak', 5, { min: 1, max: 100 }),
-        selectField(rules, 'A short team under Jailbreak', 'trivia.shortJail', [['brick', 'Brick'], ['noAdvantage', 'No Advantage']]),
-        numberField(rules, 'Quarters', 'trivia.quarters', { min: 1, max: 8 })),
-      h('p', { class: 'hint' }, 'Brick: a short team never breaks jail. No Advantage: it breaks jail only as often as its opponents.')));
-  }
-
-  return h('div', { class: 'inner' }, panels);
-}
-
 // ---- The screen ----------------------------------------------------------------------------
 
-// A preset is tagged "Unverified" when it has no primary source or its source says a rule is unverified.
-export function presetUnverified(preset) {
-  return preset.verified === false || /unverified/i.test(preset.source);
-}
+// presetUnverified moved to presets.js in 1.6.0 (view-rules.js needs it too); it is passed on from here for the tests.
+export { presetUnverified };
 
 // One line that says what a set of rules plays like, shown under the Format dropdown (review 19/10/2026, change 3), e.g.
 // "Starters 10, power 15, neg −5 · bonus 3 × 10 · 20 questions, halftime after 10". Built from the rules, not the preset,
@@ -314,11 +118,6 @@ function formatSelect(draft, onPick) {
   select.value = draft.presetId;
   select.addEventListener('change', () => onPick(select.value));
   return select;
-}
-
-// The line at the top of the Rules section: the format and where its rules come from.
-function sourceLine(rules) {
-  return [`${rules.name}: ${rules.source}`, presetUnverified({ verified: rules.verified, source: rules.source ?? '' }) ? h('span', { class: 'tag' }, 'Unverified') : null];
 }
 
 // A team card (review change 3): no labels over the boxes. Row 0 is the team name, in bold, and the Bench button; rows 1 to 4
@@ -439,32 +238,25 @@ function teamsFromDraft(draft) {
 export function renderSetup(root, state, api) {
   if (!state.ui.setup) api.setUi({ setup: freshDraft() }, false);
   const draft = state.ui.setup;
+  if (state.ui.sub?.kind === 'rules') { renderRulesScreen(root, state, api); return; }
 
   const rosterId = 'roster-names';
   const roster = h('datalist', { id: rosterId }, loadRoster().map(name => h('option', { value: name })));
 
-  // The summary line follows the rules as they are edited; the Rules section opens with where they come from.
-  const summary = h('p', { class: 'hint', id: 'format-summary' });
-  const source = h('p', { class: 'hint', id: 'rules-source' });
-  const showRules = () => {
-    summary.textContent = rulesSummary(draft.rules);
-    source.replaceChildren(...sourceLine(draft.rules).filter(Boolean));
-  };
-  const rulesHost = h('div', {}, rulesPanel(draft.rules));
-  rulesHost.addEventListener('input', showRules);
-  rulesHost.addEventListener('change', showRules);
-  showRules();
+  // The summary line says what the rules play like, as they now are.
+  const summary = h('p', { class: 'hint', id: 'format-summary' }, rulesSummary(draft.rules));
 
   // Picking another format replaces the rules, and nothing else: names and details stay.
   const format = formatSelect(draft, id => {
     draft.presetId = id;
     draft.rules = rulesFromPreset(id);
-    rulesHost.replaceChildren(rulesPanel(draft.rules));
-    showRules();
+    summary.textContent = rulesSummary(draft.rules);
   });
-  const rulesButton = h('button', { type: 'button', class: 'btn small', id: 'setup-rules' }, 'Rules');
+  const rulesButton = h('button', {
+    type: 'button', class: 'btn small', id: 'setup-rules',
+    onclick: () => { api.setUi({ sub: { kind: 'rules' } }); window.scrollTo(0, 0); },
+  }, 'Rules');
   const detailsButton = h('button', { type: 'button', class: 'btn small', id: 'setup-details', 'aria-label': 'Match details' }, 'Details');
-  const rulesSection = openedSection(draft, 'rules', 'Rules', 'rules-fold', h('div', { class: 'inner' }, source, rulesHost), rulesButton);
   const detailsSection = openedSection(draft, 'details', 'Match details', 'details-fold', detailsContent(draft), detailsButton);
 
   // Start: the typed names go to the roster, the draft becomes a match, and the page takes over.
@@ -487,7 +279,6 @@ export function renderSetup(root, state, api) {
   const form = h('form', { novalidate: true, autocomplete: 'off' },
     summary,
     h('div', { class: 'grid2 tcards' }, teamCard(draft, 0, rosterId), teamCard(draft, 1, rosterId)),
-    rulesSection,
     detailsSection,
     h('div', { class: 'startbar' }, start),
     h('p', { class: 'hint', id: 'setup-hint' }, 'Names are saved on this device for next time. A team with no names gets seats A1 to A4 (B1 to B4).'));

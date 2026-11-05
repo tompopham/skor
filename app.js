@@ -9,8 +9,10 @@ import {
 } from './storage.js';
 import { offerFile, resultLine, fileName } from './files.js';
 import { h, newId } from './dom.js';
+import { isLive } from './view-common.js';
 import { renderSetup } from './view-setup.js';
-import { renderScore, stopClockTicker } from './view-score.js';
+import { renderScore } from './view-score.js';
+import { stopClockTicker } from './view-banners.js';
 import { renderSheet, renderPast } from './view-sheet.js';
 import { renderBoard, stopBoard, CHANNEL_NAME } from './view-board.js';
 import { VERSION } from './version.js';
@@ -76,11 +78,11 @@ function back() {
 }
 
 // Closes the cycle editor or Edit rules without saving: the scoring screen, or the screen the editor
-// was opened from (the scoresheet) when it names one.
+// was opened from (the scoresheet) when it names one, which then brings the edited question's row back into view.
 function closeSub() {
   const sub = state.ui.sub;
   if (!sub) return;
-  if (sub.returnTo) go(sub.returnTo);
+  if (sub.returnTo) go(sub.returnTo, sub.kind === 'cycle' ? { focusRow: state.match.cycles.findIndex(cycle => cycle.id === sub.cycleId) } : {});
   else setUi({ sub: null, msg: '' });
 }
 
@@ -286,7 +288,7 @@ function dispatchAll(actions, uiPatch = {}) {
   }
   state.history.push(next);
   noteSubClose(uiPatch);
-  Object.assign(state.ui, { msg: '' }, uiPatch);
+  Object.assign(state.ui, { msg: '', hint: null }, uiPatch);
   commit(next);
   return { ok: true };
 }
@@ -302,7 +304,7 @@ function stepHistory(step) {
   if (!state.match || state.foreign) return false;
   const restored = step();
   if (!restored) return false;
-  Object.assign(state.ui, { msg: '', selected: null, streakN: 0 });
+  Object.assign(state.ui, { msg: '', hint: null, selected: null, streakN: 0 });
   commit({ ...restored, display: state.match.display, rev: state.match.rev + 1, changedAt: now() });
   return true;
 }
@@ -331,11 +333,14 @@ function editCycle(cycleId, returnTo = null) {
 // View: the saved match opens on its scoresheet, without becoming the match in progress. Resume: the
 // saved copy becomes the match in progress and scoring carries on. Both come back { ok: true }, or
 // { ok: false, error } with a sentence for the person when the record cannot be read.
+// View of the very version already in memory (the match in progress, looked at from Past matches) keeps it, with its undo
+// history, as Resume does: opening it afresh would empty Undo (found in the 1.5.0 check, fixed in 1.6.0).
 const UNREADABLE = 'That match cannot be read. It may be damaged; Delete or Remove takes it off the list.';
 function viewMatch(id) {
   const match = loadMatch(id);
   if (!match) return { ok: false, error: UNREADABLE };
-  openMatch(match, false);
+  if (state.history && !state.foreign && sameVersion(state.match, match)) state.viewOnly = true;
+  else openMatch(match, false);
   go('sheet');
   return { ok: true };
 }
@@ -531,8 +536,8 @@ function onBack(event) {
   if (openAsks.length > 0 || document.getElementById('foreign')) {
     openAsks.at(-1)?.('cancel');                   // a dialog is open: back closes it (the modal for another tab's change stays)
     holdEntry(was, to);
-  } else if (state.screen === 'score' && state.ui.sub) {
-    holdEntry(was, to);                            // the editor: back does what Cancel does (the cycle editor asks before discarding)
+  } else if ((state.screen === 'score' || state.screen === 'setup') && state.ui.sub) {
+    holdEntry(was, to);                            // the editor or Rules: back does what Cancel does (the cycle editor asks before discarding)
     if (state.ui.sub.onLeave) state.ui.sub.onLeave();
     else closeSub();
   } else if (state.screen === 'score') {
@@ -751,13 +756,6 @@ function isIosSafariTab() {
   return ios && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua) && !isStandalone();
 }
 
-const pad = n => String(n).padStart(2, '0');
-function dateAndTime(ms) {
-  const date = new Date(ms);
-  if (!Number.isFinite(date.getTime())) return '';
-  return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 // A backup file's text becomes the match in progress. A match with the same id already saved here
 // is compared by mergeDecision (spec 7): nothing is overwritten until the person chooses.
 function openBackupText(text) {
@@ -824,24 +822,30 @@ function clashCard({ incoming, existing, decision }) {
     h('button', { class: 'btn', onclick: () => setUi({ clash: null }) }, 'Cancel'));
 }
 
+// Home (review 19/10/2026, change 10; Tom's decision 10): New match first; a match still being played is one two-line Resume
+// button, and one that has ended is a "Last match" line with its Scoresheet; then Past matches, Room board and the two
+// backup buttons in a 2 x 2 grid.
 function renderHome(root, state) {
   const current = getCurrent();
-  const inProgress = current ? loadMatch(current) : null;
+  const saved = current ? loadMatch(current) : null;
+  const live = isLive(saved) ? saved : null;
+  const ended = saved && !live ? saved : null;
   const picker = h('input', { type: 'file', accept: '.json,application/json', hidden: true, id: 'backup-file' });
   picker.addEventListener('change', () => { const [file] = picker.files; picker.value = ''; openBackupFile(file); });
 
   const menu = h('div', { class: 'menu' },
     h('button', { class: 'btn primary', id: 'new-match', onclick: () => go('setup') }, 'New match'),
-    inProgress ? h('div', { class: 'card', id: 'resume-card' },
-      h('b', {}, 'Match in progress'),
-      h('span', { class: 'resume-line' }, summary(inProgress)),
-      h('span', { class: 'hint' }, `Last changed ${dateAndTime(inProgress.changedAt)}`),
-      // The stored copy as it is at the tap, not as it was when Home was drawn: another tab may have saved it since.
-      h('button', { class: 'btn primary', id: 'resume', onclick: () => { const now = loadMatch(current); if (now) resumeMatch(now); else render(); } }, 'Resume')) : null,
-    h('button', { class: 'btn', id: 'past-matches', onclick: () => go('past') }, 'Past matches'),
-    h('button', { class: 'btn', id: 'room-board', onclick: () => go('board') }, 'Room board'),
-    h('button', { class: 'btn', id: 'load-backup', onclick: () => picker.click() }, 'Load backup file'),
-    h('button', { class: 'btn', id: 'paste-backup', onclick: pasteBackup }, 'Paste backup text'),
+    // The stored copy as it is at the tap, not as it was when Home was drawn: another tab may have saved it since.
+    live ? h('button', { class: 'btn two resume', id: 'resume', onclick: () => { const now = loadMatch(current); if (now) resumeMatch(now); else render(); } },
+      h('span', {}, 'Resume'), h('span', { class: 'sub' }, summary(live))) : null,
+    ended ? h('div', { class: 'lastmatch' },
+      h('p', { class: 'hint', id: 'last-match' }, `Last match: ${summary(ended)}`),
+      h('button', { class: 'btn', id: 'last-sheet', onclick: () => viewMatch(current) }, 'Scoresheet')) : null,
+    h('div', { class: 'homegrid', id: 'home-grid' },
+      h('button', { class: 'btn', id: 'past-matches', onclick: () => go('past') }, 'Past matches'),
+      h('button', { class: 'btn', id: 'room-board', onclick: () => go('board') }, 'Room board'),
+      h('button', { class: 'btn', id: 'load-backup', onclick: () => picker.click() }, 'Load backup file'),
+      h('button', { class: 'btn', id: 'paste-backup', onclick: pasteBackup }, 'Paste backup text')),
     picker,
     state.ui.loadError ? h('p', { class: 'msg', id: 'load-error' }, state.ui.loadError) : null,
     state.ui.clash ? clashCard(state.ui.clash) : null);

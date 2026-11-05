@@ -1,10 +1,9 @@
-// The two screens that take over the scoring screen (it opens them through state.ui.sub): the cycle
-// editor (spec 6.4) and Edit rules (spec 6.4, "Changing a rule mid-match"). Both work on a copy, ask the
-// engine whether the copy would stand, and change the match only through api.dispatch, so the engine
-// alone decides what is allowed and this file only shows its reasons.
+// The cycle editor (spec 6.4), which takes over the scoring screen (it opens it through state.ui.sub). It works on a copy,
+// asks the engine whether the copy would stand, and changes the match only through api.dispatch, so the engine alone decides
+// what is allowed and this file only shows its reasons. Edit rules, the other screen opened this way, is view-rules.js
+// from version 1.6.0.
 
-import { derive, applyAction, ruleChangeDiff } from './engine.js';
-import { rulesPanel } from './view-setup.js';
+import { derive, applyAction } from './engine.js';
 import { swapLines } from './files.js';
 import { lineupAt, playerName } from './lineup.js';
 import { editorCards } from './view-protest.js';
@@ -34,45 +33,6 @@ const CSS = `
 #ed-strip { height: 38px; margin: 0 0 6px; font-size: 14px; line-height: 19px; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 #ed-strip.hint { color: var(--fg); }
 `;
-
-// ---- Edit rules ------------------------------------------------------------------------------
-
-export function renderRulesEditor(root, state, api) {
-  ensureStyles('editor-style', CSS);
-  const { match } = state;
-  const sub = state.ui.sub;
-  sub.draft ??= structuredClone(match.rules);
-  const back = () => api.closeSub();
-
-  async function review() {
-    let diff;
-    try {
-      diff = ruleChangeDiff(match, sub.draft);
-    } catch (error) {
-      api.setUi({ msg: refusalText(error) });
-      return;
-    }
-    const body = diff.length === 0
-      ? ['No score changes.']
-      : ['These scores change:', ...diff.map(entry => h('p', { class: 'dtext' }, h('b', {}, `${entry.label} ${fmt(entry.before)} to ${fmt(entry.after)}`)))];
-    const choice = await api.ask({
-      title: 'Apply these rules?', body,
-      buttons: [{ label: 'Apply rules', value: 'apply', primary: true }, { label: 'Keep editing', value: 'cancel' }],
-    });
-    if (choice === 'apply') {
-      const result = api.dispatch({ type: 'setRules', rules: sub.draft }, { sub: null });
-      if (!result.ok) api.setUi({ msg: refusalText(result.error) });
-    }
-  }
-
-  root.append(
-    h('div', { class: 'top' }, h('h1', { tabindex: '-1' }, 'Edit rules'),
-      h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn small', id: 'rules-back', onclick: back }, 'Back'))),
-    h('p', { class: 'hint' }, 'The format and the questions already scored stay. You will see which scores change before anything is applied.'),
-    h('p', { class: state.ui.msg ? 'msg' : 'hint' }, state.ui.msg || ''),
-    h('div', { class: 'card' }, rulesPanel(sub.draft)),
-    h('button', { type: 'button', class: 'btn primary', id: 'rules-review', onclick: review }, 'Review changes'));
-}
 
 // ---- Cycle editor (spec 6.4) -----------------------------------------------------------------
 
@@ -195,9 +155,11 @@ export function renderCycleEditor(root, state, api) {
     back();
   };
   sub.onLeave = leave;
+  // Back on the scoresheet, the edited question's row (or, after Delete, the one that took its place) is brought back into
+  // the middle of the window with focus (review 19/10/2026, change 6).
   const finished = result => {
     if (!result.ok) return false;
-    if (sub.returnTo) api.go(sub.returnTo);
+    if (sub.returnTo) api.go(sub.returnTo, { focusRow: index });
     return true;
   };
 

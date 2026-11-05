@@ -2,12 +2,15 @@
 // (spec 6.7). The sheet is the same page the "Save scoresheet" file holds: toScoresheetHTML builds it and
 // this screen takes its tables as they are, so what is on the screen, on paper and in the saved file can
 // never disagree. Each cycle row opens the cycle editor. Everything leaves the page through offerFile.
+// From version 1.6.0 (review 19/10/2026, changes 6 and 7): the sheet comes first, with the file actions behind one
+// Print or save button; where the question grid is wider than the window it shows as a list built from the same match
+// (files.js sheetRows), while print and the saved file keep the grid; and after the editor the edited row is brought back.
 
 import { derive } from './engine.js';
-import { toScoresheetHTML, toCSV, resultLine, fileName, offerFile } from './files.js';
+import { toScoresheetHTML, toCSV, resultLine, fileName, offerFile, sheetRows } from './files.js';
 import { listMatchesReport, loadMatch, getCurrent } from './storage.js';
 import { h } from './dom.js';
-import { ensureStyles, refusalText } from './view-common.js';
+import { ensureStyles, refusalText, isLive, fmt } from './view-common.js';
 import { protestControls } from './view-protest.js';
 
 // ---- Style -----------------------------------------------------------------------------------
@@ -17,9 +20,9 @@ import { protestControls } from './view-protest.js';
 
 const CSS = `
 .sheetview { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
-.sheetview .fmsg { min-height: 38px; }
-@media (min-width: 700px) { .sheetview .fmsg { min-height: 20px; } }
-.filesgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
+.sheetview .fmsg { min-height: 20px; margin: 0; }
+.sheetview > .top { margin-bottom: 0; }
+.sheetview > .top .acts .btn { white-space: nowrap; }
 .sheet { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
 .sheet .sheet-title { font-size: 18px; margin: 0; }
 .sheet .details, .sheet .key, .sheet .foot, .sheet .timeline { color: var(--muted); font-size: 14px; margin: 0; overflow-wrap: anywhere; }
@@ -27,7 +30,7 @@ const CSS = `
 .sheet h2 { margin: 12px 0 0; }
 .sheet .num, .sheet .time { text-align: right; }
 .sheet td.seat, .sheet th.seat { display: table-cell; appearance: none; min-height: 0; padding: 4px 6px; cursor: inherit; text-align: center; background: var(--bg); }
-.sheet th.seat { background: var(--btn); white-space: normal; overflow-wrap: anywhere; min-width: 56px; max-width: 120px; }
+.sheet th.seat { background: var(--btn); white-space: normal; overflow-wrap: break-word; min-width: 56px; max-width: 120px; }
 .sheet td.notes, .sheet td.set { display: table-cell; max-width: none; margin: 0; white-space: normal; overflow-wrap: break-word; min-width: 120px; }
 .sheet tr.cycle { cursor: pointer; }
 .sheet tr.cycle:hover td { background: #f4f4f4; }
@@ -41,10 +44,51 @@ const CSS = `
 .sheet .rowbtn { appearance: none; border: 1px solid var(--line); background: var(--btn); border-radius: 0; min-width: 48px; min-height: 48px; padding: 0 8px; font: inherit; cursor: pointer; }
 .sheet .cycles tr.cycle td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg); }
 .sheet .cycles thead tr:first-child th:first-child { position: sticky; left: 0; z-index: 1; }
+/* With a mouse a question row is 35 px (a 28 px button, 3 px padding); on a touch screen it stays 47 (review change 6). */
+/* Screen only: paper keeps 1.5.0's rows and headings (index.html's print rules). */
+@media screen and (hover: hover) and (pointer: fine) {
+  .sheet .cycles tr.cycle .rowbtn { min-width: 28px; min-height: 28px; padding: 0 6px; }
+  .sheet .cycles tbody td { padding-block: 3px; }
+}
+/* When the grid fits the window, its two heading rows stay at the top of the window as it scrolls (review change 7); the Q
+   heading stays over the Q cells that scroll under it. */
+@media screen {
+  .sheet:not(.listmode) .cyclewrap { overflow: visible; }
+  .sheet:not(.listmode) .cycles thead th { position: sticky; top: 0; z-index: 2; }
+  .sheet:not(.listmode) .cycles thead tr + tr th { top: var(--head1, 0px); }
+  .sheet:not(.listmode) .cycles thead tr:first-child th:first-child { z-index: 3; }
+}
+.sheet.listmode .cyclewrap, .sheet.listmode > .key { display: none; }
+.sheet:not(.listmode) .qlist { display: none; }
+/* The list (review change 7): Q, what happened (and a note under it), and the two running scores, a row a question. */
+.qlist { display: grid; gap: 0; border: 1px solid var(--line); min-width: 0; }
+.qlist .lhead, .qlist .lrow { display: grid; grid-template-columns: 36px minmax(0, 1fr) 64px 64px; column-gap: 6px; align-items: center; padding: 0 6px; }
+@media (min-width: 640px) { .qlist .lhead, .qlist .lrow { grid-template-columns: 44px minmax(0, 1fr) 76px 76px; } }
+.qlist .lhead { background: var(--btn); font-size: 14px; font-weight: bold; min-height: 32px; border-bottom: 1px solid var(--line); }
+.qlist .lhead span { overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 16px; padding-block: 4px; }
+.qlist .lhead span:nth-child(n+3), .qlist .lnum { text-align: right; font-variant-numeric: tabular-nums; }
+.qlist .lrow { appearance: none; width: 100%; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: var(--bg); text-align: left; min-height: 48px; padding-block: 4px; font: inherit; font-size: 14px; line-height: 18px; cursor: pointer; }
+.qlist .lhead + .lrow { border-top: 0; }
+@media (hover: hover) and (pointer: fine) { .qlist .lrow { min-height: 40px; } }
+.qlist .lrow:hover { background: #f4f4f4; }
+.qlist .lq { font-weight: bold; }
+.qlist .lwhat { min-width: 0; overflow-wrap: anywhere; }
+.qlist .lnote { display: block; color: var(--muted); font-size: 13px; line-height: 16px; }
+.qlist .lrow.after-end { color: var(--muted); font-style: italic; }
+.qlist .lmark { border-top: 1px solid var(--line); background: var(--btn); padding: 6px; font-size: 14px; font-weight: bold; overflow-wrap: anywhere; }
+.qlist .lmark.thrown { font-weight: normal; color: var(--muted); text-decoration: line-through; background: var(--bg); }
+/* The Players and Teams headings wrap at 78 px, and the first column (the name) stays put as the table scrolls (change 7). */
+@media screen {
+  .sheet .stats th { white-space: normal; max-width: 78px; overflow-wrap: break-word; vertical-align: bottom; }
+  .sheet .stats tbody td:first-child, .sheet .stats thead th:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg); }
+  .sheet .stats thead th:first-child { background: var(--btn); }
+}
 .afternote { border: 1px solid var(--line); padding: 8px; margin: 0; overflow-wrap: anywhere; }
 .pastlist { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; max-width: 640px; }
 .past { margin: 0; }
 .past .pline { overflow-wrap: anywhere; }
+.past .ptop { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
+.past .ptop .tag { margin-left: 0; }
 .past .row > .btn { min-width: 96px; }
 .past.damaged { border-style: dashed; }
 .pmsg { min-height: 18px; }
@@ -87,7 +131,7 @@ function openableRows(sheet, match, d, api) {
 // Gives each swap line of the sheet a Delete (the saved file has the line and no button). Delete asks first,
 // and the swap goes from the record: every player's starters heard are worked out again from what is left.
 function deletableSwaps(sheet, api) {
-  for (const row of sheet.querySelectorAll('tr.swap')) {
+  for (const row of sheet.querySelectorAll('tr.swap, .lmark.swap')) {
     const index = Number(row.dataset.marker);
     const line = row.querySelector('.swaptext')?.textContent ?? '';
     const onDelete = async () => {
@@ -102,7 +146,7 @@ function deletableSwaps(sheet, api) {
       api.setUi({ fmsg: { text: refusalText(result.error), bad: true } });
       document.getElementById('files-msg')?.scrollIntoView?.({ block: 'nearest' });
     };
-    row.firstElementChild.append(h('button', { type: 'button', class: 'rowbtn noprint', 'aria-label': `Delete the swap: ${line}`, onclick: onDelete }, 'Delete'));
+    (row.matches('tr') ? row.firstElementChild : row).append(h('button', { type: 'button', class: 'rowbtn noprint', 'aria-label': `Delete the swap: ${line}`, onclick: onDelete }, 'Delete'));
   }
 }
 
@@ -120,20 +164,78 @@ function controlledProtests(sheet, state, api, d) {
   }
 }
 
-// What a file action did, said under the buttons. A share sheet the person closed says nothing.
-function reporter(note, api) {
-  return (text, bad = false) => {
-    note.textContent = text;
-    note.className = bad ? 'msg fmsg' : 'hint fmsg';
-    api.setUi({ fmsg: { text, bad } }, false);
-  };
+// The list for a window too narrow for the grid (review change 7): built from the match, not from the grid's cells. A
+// question's row opens the editor, like the grid's.
+function questionList(match, d, api) {
+  const { teams, rows } = sheetRows(match, d);
+  return h('div', { class: 'qlist noprint', id: 'qlist' },
+    h('div', { class: 'lhead', 'aria-hidden': 'true' }, h('span', {}, 'Q'), h('span', {}, 'What happened'), ...teams.map(name => h('span', { title: name }, name))),
+    rows.map(row => {
+      if (row.kind !== 'cycle') {
+        return h('div', { class: `lmark${row.kind === 'swap' ? ' swap' : row.kind === 'thrown' ? ' thrown' : ''}`, 'data-marker': row.kind === 'swap' ? row.index : null },
+          row.kind === 'swap' ? h('span', { class: 'swaptext' }, row.text) : row.text);
+      }
+      return h('button', {
+        type: 'button', class: row.counted ? 'lrow' : 'lrow after-end', 'data-index': row.index,
+        'aria-label': `Question ${row.number}: ${row.what}${row.note ? `. ${row.note}` : ''}. ${teams[0]} ${fmt(row.running[0])}, ${teams[1]} ${fmt(row.running[1])}. Open it to edit it.`,
+        onclick: () => api.editCycle(match.cycles[row.index].id, 'sheet'),
+      },
+      h('span', { class: 'lq' }, String(row.number)),
+      h('span', { class: 'lwhat' }, row.what, row.note ? h('span', { class: 'lnote' }, row.note) : null),
+      ...row.running.map(points => h('span', { class: 'lnum' }, fmt(points))));
+    }));
 }
 
-function filesCard(c) {
-  const { api, state } = c;
-  const note = h('p', { class: state.ui.fmsg?.bad ? 'msg fmsg' : 'hint fmsg', id: 'files-msg', role: 'status' }, state.ui.fmsg?.text ?? '');
-  const say = reporter(note, api);
+// The grid where it fits the window, else the list; again whenever the window changes size. When the grid shows, its second
+// heading row is held under the first.
+function chooseView() {
+  const sheet = document.getElementById('sheet');
+  const table = sheet?.querySelector('table.cycles');
+  if (!table) return;
+  const wrap = table.parentElement;
+  wrap.classList.add('cyclewrap');
+  sheet.classList.remove('listmode');
+  const fits = table.offsetWidth <= wrap.clientWidth + 1;
+  sheet.classList.toggle('listmode', !fits);
+  if (fits) table.style.setProperty('--head1', `${table.tHead.rows[0].getBoundingClientRect().height}px`);
+}
+// Only a change of width can change whether the grid fits: iPhone Safari also fires resize when its toolbar folds away as the
+// page scrolls, and that is left alone. Where the page was scrolled to is kept across the check.
+let resizing = false;
+let watching = false;
+let lastWidth = 0;
+function watchSize() {
+  lastWidth = window.innerWidth;
+  if (watching) return;
+  watching = true;
+  window.addEventListener('resize', () => {
+    if (resizing || window.innerWidth === lastWidth) return;
+    resizing = true;
+    requestAnimationFrame(() => {
+      resizing = false;
+      lastWidth = window.innerWidth;
+      const y = window.scrollY;
+      chooseView();
+      window.scrollTo(window.scrollX, y);
+    });
+  });
+}
 
+// The question row at `index` (as many down as the match has questions), in whichever view shows.
+function rowAt(index) {
+  const sheet = document.getElementById('sheet');
+  if (!sheet) return null;
+  if (sheet.classList.contains('listmode')) {
+    const rows = sheet.querySelectorAll('#qlist .lrow');
+    return rows[Math.min(index, rows.length - 1)] ?? null;
+  }
+  const rows = sheet.querySelectorAll('table.cycles tbody tr.cycle');
+  return rows[Math.min(index, rows.length - 1)]?.querySelector('.rowbtn') ?? null;
+}
+
+// The five file actions, behind Print or save (review change 6). Each runs inside its own button's click, so iPhone Safari
+// still lets it share, download or copy; the dialog closes first. What happened is said in the line under the heading.
+function fileActions(state, api, say) {
   const report = (file, result) => {
     if (result.ok) say(result.method === 'share' ? `Shared ${file.name}.` : `Saved ${file.name}. Look in your downloads.`);
     else if (result.cancelled) say('');
@@ -176,18 +278,26 @@ function filesCard(c) {
       await done;
     }
   };
-
-  const button = (id, label, onclick) => h('button', { type: 'button', class: 'btn', id, onclick }, label);
-  return h('div', { class: 'card noprint', id: 'files-card' },
-    h('b', { tabindex: '-1', id: 'files-head' }, 'Print and save'),
-    h('div', { class: 'filesgrid' },
-      button('file-print', 'Print', print),
-      button('file-sheet', 'Save scoresheet', save('html', 'text/html;charset=utf-8', toScoresheetHTML)),
-      button('file-csv', 'Save CSV', save('csv', 'text/csv;charset=utf-8', toCSV)),
-      button('file-backup', 'Save backup', saveBackup),
-      button('file-copy', 'Copy result line', copyLine)),
-    note);
+  return [
+    ['print', 'Print', print],
+    ['sheet', 'Save scoresheet', save('html', 'text/html;charset=utf-8', toScoresheetHTML)],
+    ['csv', 'Save CSV', save('csv', 'text/csv;charset=utf-8', toCSV)],
+    ['backup', 'Save backup', saveBackup],
+    ['copy', 'Copy result line', copyLine],
+  ];
 }
+
+function filesDialog(actions, api) {
+  return api.ask({
+    title: 'Print or save',
+    body: finish => h('div', { class: 'stack', id: 'files-choices' }, actions.map(([value, label, act]) => h('button', {
+      type: 'button', class: 'btn', id: `file-${value}`, 'data-value': value, onclick: () => { finish(value); act(); },
+    }, label))),
+    buttons: [{ label: 'Close', value: 'cancel' }],
+  });
+}
+
+const HINT = 'Tap a question to open it';
 
 export function renderSheet(root, state, api) {
   ensureStyles('sheet-style', CSS);
@@ -199,6 +309,7 @@ export function renderSheet(root, state, api) {
   const heading = h('h2', { class: 'sheet-title' }, ...title.childNodes);
   const sheet = h('div', { class: 'sheet', id: 'sheet' }, heading, ...rest);
   openableRows(sheet, match, d, api);
+  sheet.querySelector('table.cycles')?.parentElement.after(questionList(match, d, api));
   deletableSwaps(sheet, api);
   controlledProtests(sheet, state, api, d);
 
@@ -207,20 +318,42 @@ export function renderSheet(root, state, api) {
   const note = late.length === 0 ? null : h('p', { class: 'afternote noprint', id: 'after-note' },
     `${late.join(', ')} ${late.length === 1 ? 'comes' : 'come'} after the end of the match. ${late.length === 1 ? 'It is' : 'They are'} listed and marked on the sheet, and not counted in the scores or the statistics.`);
 
+  // One reserved line under the heading: the hint, or what a file action, a swap's Delete or a protest last said.
+  const message = h('p', { class: state.ui.fmsg?.bad ? 'msg fmsg noprint' : 'hint fmsg noprint', id: 'files-msg', role: 'status' }, state.ui.fmsg?.text || HINT);
+  const say = (text, bad = false) => {
+    message.textContent = text || HINT;
+    message.className = bad ? 'msg fmsg noprint' : 'hint fmsg noprint';
+    api.setUi({ fmsg: text ? { text, bad } : null }, false);
+  };
+  const actions = fileActions(state, api, say);
+
   root.append(h('div', { class: 'sheetview' },
     h('div', { class: 'top noprint' }, h('h1', { tabindex: '-1' }, 'Scoresheet and stats'),
-      h('div', { class: 'acts' }, h('button', { type: 'button', class: 'btn small', id: 'sheet-back', onclick: () => api.back() }, 'Back'))),
-    h('p', { class: 'hint noprint' }, 'Tap a question to look at it or change it.'),
+      h('div', { class: 'acts' },
+        h('button', { type: 'button', class: 'btn small', id: 'sheet-files', onclick: () => filesDialog(actions, api) }, 'Print or save'),
+        h('button', { type: 'button', class: 'btn small', id: 'sheet-back', onclick: () => api.back() }, 'Back'))),
+    message,
     note,
-    filesCard({ state, api }),
     sheet));
+  chooseView();
+  watchSize();
 
-  // The menu's Print and Save files come here with an action to carry out once the screen is drawn.
-  const { action } = state.ui;
+  // The menu's Print and Save files come here with an action to carry out once the screen is drawn; the editor comes back
+  // with the row it edited, which is brought to the middle of the window and given focus (after the page's own scroll to
+  // the top, which follows the drawing).
+  const { action, focusRow } = state.ui;
   if (action) {
     api.setUi({ action: null }, false);
-    if (action === 'print') setTimeout(() => document.getElementById('file-print')?.click(), 60);
-    else if (action === 'files') document.getElementById('files-head')?.scrollIntoView?.({ block: 'start' });
+    if (action === 'print') setTimeout(actions[0][2], 60);
+    else if (action === 'files') setTimeout(() => filesDialog(actions, api), 0);
+  }
+  if (Number.isInteger(focusRow) && focusRow >= 0) {
+    api.setUi({ focusRow: null }, false);
+    queueMicrotask(() => {
+      const row = rowAt(focusRow);
+      row?.scrollIntoView({ block: 'center' });
+      row?.focus({ preventScroll: true });
+    });
   }
 }
 
@@ -231,7 +364,7 @@ export function renderSheet(root, state, api) {
 function describe(entry) {
   const match = loadMatch(entry.id);
   if (match) {
-    return { id: entry.id, damaged: false, line: resultLine(match, derive(match)), started: dateOf(match.createdAt), changed: dateOf(match.changedAt, true) };
+    return { id: entry.id, damaged: false, live: isLive(match), line: resultLine(match, derive(match)), started: dateOf(match.createdAt), changed: dateOf(match.changedAt, true) };
   }
   const names = (Array.isArray(entry.teams) ? entry.teams : []).map(name => String(name ?? '').trim());
   return {
@@ -271,9 +404,9 @@ export function renderPast(root, state, api) {
   const list = items.length === 0
     ? h('p', { class: 'hint', id: 'past-empty' }, 'No matches are saved on this device yet.')
     : h('div', { class: 'pastlist', id: 'past-list' }, items.map(item => h('div', { class: item.damaged ? 'card past damaged' : 'card past', 'data-id': item.id },
-      h('b', { class: 'pline' }, item.line),
-      h('span', { class: 'hint' }, [item.started ? `Started ${item.started}` : '', item.changed ? `last changed ${item.changed}` : '',
-        item.id === current ? 'match in progress' : ''].filter(Boolean).join(' · ')),
+      // Tagged In progress only while it is the match in progress and has not ended (review change 10).
+      h('div', { class: 'ptop' }, h('b', { class: 'pline' }, item.line), item.id === current && item.live ? h('span', { class: 'tag' }, 'In progress') : null),
+      h('span', { class: 'hint' }, [item.started ? `Started ${item.started}` : '', item.changed ? `last changed ${item.changed}` : ''].filter(Boolean).join(' · ')),
       item.damaged ? h('span', { class: 'msg' }, 'This saved match is damaged and cannot be opened.') : null,
       h('div', { class: 'row' },
         h('button', { type: 'button', class: 'btn', 'data-act': 'view', disabled: item.damaged, onclick: () => open(api.viewMatch, item) }, 'View'),

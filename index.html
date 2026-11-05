@@ -19,7 +19,7 @@
 /* Plain look on purpose (spec 2): black on white, grey square buttons, Arial, bordered tables, no
    colour, no rounded corners or shadows, one light theme with an explicit white background.
    A selected state is shown inverted (black). The base rules are copied from bare/scorer.html. */
-:root { --bg: #ffffff; --fg: #000000; --muted: #555555; --line: #999999; --btn: #eeeeee; --off: #f6f6f6; --offfg: #aaaaaa; --bad: #b00000; color-scheme: light; }
+:root { --bg: #ffffff; --fg: #000000; --muted: #555555; --line: #999999; --btn: #eeeeee; --off: #f6f6f6; --offfg: #767676; --bad: #b00000; color-scheme: light; }
 * { box-sizing: border-box; }
 html { background: var(--bg); }
 html, body { min-height: 100%; }
@@ -68,6 +68,9 @@ button { font: inherit; color: inherit; touch-action: manipulation; -webkit-touc
 label { font-size: 14px; display: grid; gap: 2px; min-width: 0; }
 input, select, textarea { font: 16px/1.3 Arial, Helvetica, sans-serif; padding: 8px; border: 1px solid var(--line); border-radius: 0; background: var(--bg); color: var(--fg); min-width: 0; width: 100%; min-height: 40px; }
 input[type="checkbox"], input[type="radio"] { width: 24px; height: 24px; min-height: 0; padding: 0; margin: 0; flex: none; accent-color: var(--fg); }
+/* A box or dropdown that does nothing looks it (review 19/10/2026, change 8): the greyed button's colours, #767676 on #f6f6f6
+   (4.2:1, readable but plainly off). Safari would otherwise fade it to 40%, so the opacity and text fill are set too. */
+input:disabled, select:disabled, textarea:disabled { color: var(--offfg); background: var(--off); border-color: #cccccc; opacity: 1; -webkit-text-fill-color: var(--offfg); }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 @media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } .score { font-size: 34px; } }
 .tablewrap { overflow-x: auto; }
@@ -85,12 +88,19 @@ td.n, th.n { text-align: right; }
 .notice .btn { color: var(--fg); }
 
 /* Home */
-.menu { display: grid; gap: 8px; max-width: 480px; }
+.menu { display: grid; gap: 8px; max-width: 640px; }
 .menu .btn { width: 100%; min-height: 56px; text-align: left; }
 .menu .card { margin: 0; }
+/* Home (review 19/10/2026, change 10): Resume is one button of two lines, the result wrapping under it; an ended match is a
+   line with its Scoresheet button; the other four buttons are a 2 x 2. */
+.menu .btn.resume { min-height: 64px; justify-items: start; text-align: left; padding: 6px 12px; font-weight: bold; }
+.menu .btn.resume .sub { font-size: 14px; font-weight: normal; white-space: normal; overflow: visible; overflow-wrap: anywhere; text-align: left; }
+.lastmatch { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.lastmatch .hint { overflow-wrap: anywhere; }
+.lastmatch .btn { width: auto; }
+.homegrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
 .card .msg:empty { display: none; }
-.resume-line { overflow-wrap: anywhere; }
-.notes { display: grid; gap: 8px; margin-top: 16px; max-width: 480px; }
+.notes { display: grid; gap: 8px; margin-top: 12px; max-width: 480px; }
 /* The words on Home that search engines read without running app.js (18/10/2026). The heading, the tagline and
    the about line are written into #app below, and app.js draws Home with the same words in the same places, so
    nothing moves when it takes over. A page opened at #board (the room board) keeps them hidden until the board
@@ -146,7 +156,6 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 .benchrows[hidden] { display: none; }
 .benchrows > .btn { margin-left: 24px; }
 details.fold.shut:not([open]) { display: none; }
-#rules-source { font-size: 13px; }
 .startbar { position: sticky; bottom: 0; z-index: 2; background: var(--bg); border-top: 1px solid var(--line); padding: 8px 0; margin-top: 4px; }
 #start-match { min-height: 52px; width: 100%; max-width: 480px; }
 /* A box brought into view (Tab, the phone's next-field arrow) stops above the Start bar, not under it. */
@@ -155,7 +164,8 @@ details.fold.shut:not([open]) { display: none; }
 /* One line from 640 px, cut short rather than wrapped, so a scroll bar's 15 px cannot push the page past Tom's window. */
 @media (min-width: 640px) { #setup-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
 @media (pointer: coarse) {
-  #app[data-screen="setup"] input:not([type="checkbox"]):not([type="radio"]), #app[data-screen="setup"] select { min-height: 44px; }
+  #app[data-screen="setup"] input:not([type="checkbox"]):not([type="radio"]), #app[data-screen="setup"] select,
+  #rules-screen input:not([type="checkbox"]):not([type="radio"]), #rules-screen select { min-height: 44px; }
 }
 .unbuilt { max-width: 480px; display: grid; gap: 8px; }
 .unbuilt h1 { font-size: 18px; margin: 0; }
@@ -225,8 +235,8 @@ details.fold.shut:not([open]) { display: none; }
   #others { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px; }
   #others > #dead { grid-column: 1 / -1; order: -1; min-height: 56px; }
   .top.scoretop { padding-bottom: 4px; margin-bottom: 4px; }
-  .banners:empty { margin: 0; }
 }
+.banners:empty { margin: 0; }   /* at every width, so an empty one adds nothing under the last row (Streak on a 664 px phone) */
 /* 900 to 1099 px: the keys and the recent questions side by side under the two blocks. From 1100 px they are a third
    column, and the scoring screen may be 1200 px wide. Below 900 they are hidden. */
 @media (min-width: 900px) {
@@ -235,7 +245,7 @@ details.fold.shut:not([open]) { display: none; }
 @media (min-width: 1100px) {
   .score-layout { grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
   .side { grid-template-columns: minmax(0, 1fr); }
-  #app[data-screen="score"], .timelayer { max-width: 1200px; }
+  #app[data-screen="score"] { max-width: 1200px; }
 }
 /* A phone in a bonus (Tom's decision 4, option A): the eight seats cannot be pressed while a bonus is open, so they go
    below the bonus panel, and the team names and scores stay where they were. The only move the scoring screen makes
@@ -257,7 +267,12 @@ details.fold.shut:not([open]) { display: none; }
   .main[data-stage="bonus"] .seat:nth-of-type(4) { grid-row: 9; }
   .main[data-stage="bonus"] > .banners { grid-column: 1 / -1; grid-row: 10; }
 }
-@media (max-width: 899px) { .seat .key { display: none; } .part .kh { display: none; } }
+/* Key hints (review 19/10/2026, change 9): the seat numbers, J K L and the key printed on each button show whenever there is a
+   mouse, whatever the width, and never on a touch screen or with the single-key shortcuts off. */
+@media (hover: none), (pointer: coarse) { .seat .key, .part .kh, .kk { display: none; } }
+.keysoff .seat .key, .keysoff .part .kh, .keysoff .kk { display: none; }
+.kk { color: var(--muted); font-size: 12px; font-weight: normal; margin-left: 6px; }
+.btn:disabled .kk, .seat:disabled .key { color: inherit; }
 .statusline { height: 38px; margin: 0 0 6px; font-size: 14px; line-height: 1.35; color: var(--muted); overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .statusline.err { color: var(--bad); }
 .picker { margin-bottom: 8px; min-height: 48px; display: flex; }
@@ -265,8 +280,16 @@ details.fold.shut:not([open]) { display: none; }
 .picker .chip { flex: 1 1 0; }
 .chip:disabled { color: var(--offfg); background: var(--off); border-color: #cccccc; cursor: default; }
 .chip.on:disabled { background: #777777; border-color: #777777; color: #ffffff; }
-.picker label { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: center; font-size: 16px; flex: 1; }
 .picker select { min-height: 48px; }
+/* The trivia row (review 19/10/2026, change 11): Format, Next clue and End quarter in one 48 px row on a phone; from 640 px,
+   at the top of the right column, the Format box across it and the two buttons under it. */
+.picker.trivia { display: grid; grid-template-columns: minmax(0, 1fr) 88px 88px; gap: 4px; }
+@media (max-width: 639px) { .picker.trivia { margin-bottom: 4px; } }
+.picker.trivia .btn { min-width: 0; padding: 0 6px; }
+@media (min-width: 640px) {
+  .picker.trivia { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .picker.trivia select { grid-column: 1 / -1; }
+}
 .tname .tn { overflow: hidden; text-overflow: ellipsis; display: block; }
 .bar .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 20px; }
 .bar .row > .btn { overflow: hidden; min-width: 0; }
@@ -283,15 +306,25 @@ details.fold.shut:not([open]) { display: none; }
 .banner { border: 1px solid var(--line); padding: 8px 10px; display: grid; gap: 6px; min-width: 0; }
 .banner p { margin: 0; overflow-wrap: anywhere; }
 .banner.warn { border-color: var(--bad); }
-.copyline { display: grid; grid-template-columns: 1fr auto; gap: 6px; min-width: 0; }
+/* The score line to read out (review 19/10/2026, change 15): all of it, wrapped, 20 px bold in a 1 px box that one tap
+   selects; Copy is a full-width button under it. */
+.scoreline { border: 1px solid var(--line); padding: 6px 8px; font: bold 20px/26px Arial, Helvetica, sans-serif; overflow-wrap: anywhere; min-width: 0; -webkit-user-select: all; user-select: all; }
+.copybtn { width: 100%; }
 .legend { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; margin: 0; }
 .legend dt { font-weight: bold; white-space: nowrap; }
 .legend dd { margin: 0; color: var(--muted); }
-.recent { display: grid; gap: 4px; }
-.rc { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; text-align: left; align-items: center; padding: 4px 8px; }
-.rc .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rc .run { font-variant-numeric: tabular-nums; color: var(--muted); }
-.rc .flag { grid-column: 1 / -1; color: var(--bad); font-size: 12px; }
+.legend .off { color: var(--offfg); }
+/* Recent questions (review 19/10/2026, change 12): a box of its own that scrolls inside, so the page never grows past the window
+   mid-match, and the scoring screen keeps a scroll bar's gutter, so a scroll bar coming or going never moves a button. Each
+   row is two lines in 48 px: "Q5   50 : 50" in bold, then what happened, wrapped. */
+html:has(#app[data-screen="score"]) { scrollbar-gutter: stable; }
+.recentbox { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.recent { display: grid; gap: 4px; align-content: start; max-height: max(160px, calc(100vh - 480px)); overflow-y: auto; }
+.rc { display: grid; grid-template-columns: minmax(0, 1fr); text-align: left; align-content: center; padding: 4px 8px; min-height: 48px; }
+.rc .rcline { display: flex; justify-content: space-between; gap: 8px; font-weight: bold; line-height: 18px; }
+.rc .run { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rc .what { font-size: 13px; line-height: 17px; overflow-wrap: anywhere; }
+.rc .flag { color: var(--bad); font-size: 12px; }
 
 /* The clock (v2 3.3). The scoring screen has a fixed slot for it: one box, 48 px tall, in every state (a button under a
    countdown, plain text without one or after the match has ended, whatever it says), so no button moves when the match
@@ -321,6 +354,22 @@ button.clockslot { background: var(--btn); }
 .timebox .timetext { flex: 1 1 0; min-width: 0; font-weight: bold; overflow-wrap: anywhere; }
 .timebox .timeleft { flex: none; font: bold 28px/1 Arial, Helvetica, sans-serif; font-variant-numeric: tabular-nums; }
 .timebox .btn { flex: none; min-width: 80px; }
+/* The halftime box (review change 22): the title with its Close at the top, then the score line, Copy and a backup. */
+.timebox.halfbox { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 6px; padding: 6px 10px 10px; }
+.halfbox .halfhead { display: flex; align-items: center; gap: 8px; }
+.halfbox .halfhead b { flex: 1 1 0; min-width: 0; font-size: 18px; }
+.halfbox p { margin: 0; }
+.halfbox .btn { min-width: 0; }
+/* From 640 px the layer keeps to the team block's column (review change 14, option A), so a box never covers a button in the
+   right-hand column: the layer's columns copy the scoring screen's, its first one the team block. From 1100 px the screen
+   also has the side column (300 px and a 12 px gap) and the two blocks share what is left. */
+@media (min-width: 640px) {
+  .timelayer { grid-template-columns: minmax(0, 1fr) calc(clamp(300px, 40%, 320px) + 16px); column-gap: 0; }
+  .timelayer > * { grid-column: 1; }
+}
+@media (min-width: 1100px) {
+  .timelayer { max-width: 1200px; grid-template-columns: minmax(0, 1fr) calc(clamp(300px, (100% - 312px) * 0.4, 320px) + 328px); }
+}
 
 /* Update notice (spec 3.1): shown above Home, Past matches, Setup and the scoresheet when a new version is waiting;
    never above the scoring screen (it would move the buttons: R36, there it is one line in the menu) or the room
@@ -368,6 +417,9 @@ button.clockslot { background: var(--btn); }
   .sheetview .sheet h2 { font-size: 11pt; margin: 6mm 0 1mm; }
   .sheetview .sheet p { margin: 1mm 0; font-size: 8.5pt; color: #000; }
   .sheetview .sheet .wide { overflow: visible; }
+  .sheetview .sheet.listmode .cyclewrap { display: block !important; }   /* the list is for a narrow window; paper has the grid */
+  .sheetview .sheet .cycles thead th, .sheetview .sheet .stats th, .sheetview .sheet .stats td { position: static; }
+  .sheetview .sheet.listmode > .key { display: block !important; }
   .sheetview .sheet table { width: 100%; margin: 2mm 0; font-size: 8.5pt; }
   .sheetview .sheet th, .sheetview .sheet td { padding: 0.8mm 1.5mm; border: 1px solid #000; font-size: 8.5pt; white-space: normal; vertical-align: top; text-align: left; background: none; color: #000; }
   .sheetview .sheet th { background: #e6e6e6; }

@@ -41,9 +41,11 @@ function canAnswer(d, match, { team, seat }) {
   return seatFilled(match, d, team, seat);
 }
 
-// P, C, N and W after a seat is chosen. P also needs powers in the rules.
+// P, C, N and W after a seat is chosen. P also needs powers in the rules. Pressed in a starter before any seat is chosen,
+// one says so (review 19/10/2026, change 9): the screen shows the hint in its prompt line.
 function resultKey(result, chosen, d, match) {
-  if (!chosen || !canAnswer(d, match, chosen)) return null;
+  if (!chosen) return d.open.stage === 'starter' && d.open.format !== 'streak' ? { hint: 'Choose a seat first' } : null;
+  if (!canAnswer(d, match, chosen)) return null;
   if (result === 'power' && !(d.open.canPower && match.rules.tossup.power != null)) return null;
   return action({ type: 'buzz', team: chosen.team, seat: chosen.seat, result });
 }
@@ -82,7 +84,7 @@ function timeCalledKey(d, match) {
 
 // ev = { key, shiftKey, metaKey, ctrlKey, repeat, inTextField }
 // ui = { selected: null | { team, seat }, keysOn }
-// Returns { select: { team, seat } }, { action: <engine action> }, { ui: 'undo' | 'redo' | 'cancel' },
+// Returns { select: { team, seat } }, { action: <engine action> }, { ui: 'undo' | 'redo' | 'cancel' }, { hint: text },
 // or null for a key that does nothing. Nothing is done while typing in a text box (the page's own
 // Cmd+Z must undo the typing) or for a held-down repeat. With the single-key shortcuts switched
 // off, every single key does nothing, but Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z still undo and redo:

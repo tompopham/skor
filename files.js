@@ -472,6 +472,54 @@ function cycleTable(match, d, groups) {
   return `<div class="wide"><table class="cycles">\n<thead><tr>${head1}</tr><tr>${head2}</tr></thead>\n<tbody>\n${body}\n</tbody></table></div>`;
 }
 
+// The question table as rows for the scoresheet screen's list view (review 19/10/2026, change 7; Tom's decision 6): on a window
+// too narrow for the full grid, one row a question, saying what happened in words with the two running scores, the left
+// team first; the quarter ends, swaps and thrown-out entries sit between the rows as they do in the grid. Built from the
+// same record and derive() as the grid, never from its cells, so the two cannot disagree. Text only: the screen draws it.
+// Returns { teams: [left name, right name], rows }, each row { kind: 'cycle', index, number, what, note, running, counted },
+// { kind: 'marker', text }, { kind: 'swap', index, text } (index: the marker's, for Delete) or { kind: 'thrown', text }.
+const signed = number => (number < 0 ? `\u2212${-number}` : String(number));
+export function sheetRows(match, d) {
+  const order = leftRight(match);
+  const lineups = lineupsOf(match);
+  const showType = Boolean(match.rules.trivia) || match.rules.starterTypes.on || match.cycles.some(c => c.type !== 'normal');
+  const thrown = thrownOutLines(match, d);
+  const quarters = quarterRows(match, d);
+  const swaps = swapLines(match);
+  const markerRows = index => [
+    ...(quarters.get(index) ?? []).map(text => ({ kind: 'marker', text })),
+    ...swaps.filter(swap => swap.after - 1 === index).map(swap => ({ kind: 'swap', index: swap.index, text: swap.text })),
+  ];
+  const rows = [...markerRows(-1)];
+  match.cycles.forEach((cycle, i) => {
+    const dc = d.cycles[i];
+    const name = (team, seat) => sitterName(match, lineups[i], team, seat);
+    const bits = cycle.buzzes.map((buzz, k) => {
+      const mark = RESULT_MARKS[buzz.result] ?? '';
+      const clue = dc.format === 'jackpot' ? ` (clue ${(buzz.clue ?? 0) + 1})` : '';
+      return `${name(buzz.team, buzz.seat)} ${mark === '' ? '' : `${mark} `}${signed(dc.buzzes[k].points)}${clue}`;
+    });
+    dc.streak.forEach(turn => bits.push(`${name(turn.team, turn.seat)} S ${turn.answers}${turn.wrong ? ' wrong' : ''} (${turn.points})`));
+    const controller = dc.bonusNumber === null ? undefined : cycle.buzzes.find(isCorrect)?.team;
+    if (controller !== undefined) bits.push(`bonus ${signed(dc.ownBonus[controller])}`);
+    order.forEach(team => { if (dc.bounce[team] !== 0) bits.push(`${teamName(match, team)} bounce ${signed(dc.bounce[team])}`); });
+    order.forEach(team => { if (dc.reward[team] !== 0) bits.push(`${teamName(match, team)} sweep ${signed(dc.reward[team])}`); });
+    const what = bits.length > 0 ? bits.join(', ') : cycle.dead ? 'Dead' : 'Open';
+    const label = typeLabel(match, cycle, dc);
+    const note = [cycle.dead && bits.length > 0 ? 'Dead' : null,
+      ...cycle.lostTurn.map(team => `${teamName(match, team)} lost its turn`),
+      ...statusWords(dc, cycle).map(capitalise), dc.bonusRepeatOf === null ? null : repeatText(dc.bonusNumber, dc.bonusRepeatOf),
+      String(cycle.note ?? '').trim() || null].filter(Boolean).join(' · ');
+    rows.push({
+      kind: 'cycle', index: i, number: dc.number, what: showType && label !== 'Normal' ? `${label}: ${what}` : what, note,
+      running: order.map(team => dc.running[team]), counted: !afterEnd(dc),
+    });
+    rows.push(...thrown.filter(line => line.cycleId === cycle.id).map(line => ({ kind: 'thrown', text: line.pieces.map(([, text]) => text).join('') })));
+    rows.push(...markerRows(i));
+  });
+  return { teams: order.map(team => teamName(match, team)), rows };
+}
+
 function statsTables(match, d, groups) {
   const shown = columns => columns.filter(c => c.group === undefined || groups.has(c.group));
   const playerColumns = shown(PLAYER_COLUMNS), teamColumns = shown(TEAM_COLUMNS);

@@ -11,22 +11,25 @@
 
 import { derive, applyAction, FORMATS } from './engine.js';
 import { keyToCommand, tapGuard, sittingNow } from './keys.js';
-import { lineupsOf, playersOf, playerName } from './lineup.js';
+import { playersOf, playerName } from './lineup.js';
 import { loadSettings, saveSettings } from './storage.js';
-import { resultLine } from './files.js';
-import { clockRunning, played, countdownState, defaultClockRules, timeoutsUsed, timeSummary, formatLength } from './clock.js';
-import { unlockSound, gong, beep } from './sound.js';
+import { clockRunning, timeoutsUsed } from './clock.js';
+import { unlockSound } from './sound.js';
 import { h } from './dom.js';
 import {
-  fmt, MINUS, teamName, leftRight, flagText, repeatText, refusalText, STREAK_MAX, triviaFormats, select, check, copyText,
+  fmt, MINUS, teamName, leftRight, repeatText, refusalText, STREAK_MAX, formatOptions, select, check,
 } from './view-common.js';
-import { renderCycleEditor, renderRulesEditor } from './view-editor.js';
+import { renderCycleEditor } from './view-editor.js';
+import { renderRulesScreen } from './view-rules.js';
 import { protestFlow, throwOutFlow, boundsWords } from './view-protest.js';
 import { menuModel, showMenu } from './view-menu.js';
+import { legend, recentList } from './view-side.js';
+import {
+  copyLine, backupButton, checkLine, clockSlot, clockRulesOf, refreshClock, startClockTicker, closeHalftimeBox, banners,
+} from './view-banners.js';
 
 // ---- Words and numbers -----------------------------------------------------------------------
 
-const RESULT_WORDS = { power: 'power', ten: '10', neg: 'neg', wrong: 'wrong' };
 const hasEntry = cycle => cycle !== null && cycle !== undefined && (cycle.buzzes.length > 0 || cycle.lostTurn.length > 0 || cycle.streak.length > 0);
 
 // ---- The tap guard and the keys --------------------------------------------------------------
@@ -61,7 +64,7 @@ function listen(state, api) {
   // or key on the scoring screen unlocks it. Capturing, so that a tap which starts the match (on Setup) is not one.
   for (const type of ['pointerup', 'click', 'keydown']) document.addEventListener(type, unlockOnScoring, true);
   // A phone that was locked wakes with its timer asleep: read the clock again at once.
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tickClock(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && live) refreshClock(live.state, live.api); });
 }
 
 function unlockOnScoring() {
@@ -81,10 +84,11 @@ function onKey(event) {
     { selected: state.ui.selected ?? null, keysOn: keysAreOn() }, c.d, c.match);
   if (!command) return;
   event.preventDefault();
-  if (command.select) api.setUi({ selected: command.select, msg: '', streakN: 0 });
+  if (command.hint) api.setUi({ hint: command.hint });
+  else if (command.select) api.setUi({ selected: command.select, msg: '', streakN: 0, hint: null });
   else if (command.ui === 'undo') api.undo();
   else if (command.ui === 'redo') api.redo();
-  else if (command.ui === 'cancel') api.setUi({ selected: null, msg: '', streakN: 0 });
+  else if (command.ui === 'cancel') api.setUi({ selected: null, msg: '', streakN: 0, hint: null });
   else if (command.action.type === 'timeCalled') callTime(c);
   else c.act(command.action);
 }
@@ -118,53 +122,13 @@ function makeContext(state, api) {
   return c;
 }
 
-// ---- Small builders --------------------------------------------------------------------------
-
-// A line to read out or paste, in a box that can be selected, with a Copy button.
-function copyLine(text) {
-  const input = h('input', { readonly: true, 'aria-label': 'Score check line', class: 'copytext' });
-  input.value = text;
-  input.addEventListener('focus', () => input.select());
-  const button = h('button', { type: 'button', class: 'btn' }, 'Copy');
-  button.addEventListener('click', async () => {
-    button.textContent = await copyText(text, input) ? 'Copied' : 'Select the line and copy it';
-  });
-  return h('div', { class: 'copyline' }, input, button);
-}
-
-const backupButton = api => h('button', { type: 'button', class: 'btn', id: 'backup-now', onclick: () => api.offerBackup() }, 'Save a backup file');
-
-// "Edinburgh A 140, Glasgow 95 after 10": the scores after a cycle, the left team first like the files.
-function checkLine(match, d, cycleId = null) {
-  const done = cycleId ? d.cycles.find(x => x.id === cycleId) : d.cycles.filter(x => x.closed).at(-1);
-  const running = done ? done.running : [0, 0];
-  const [left, right] = leftRight(match);
-  return `${teamName(match, left)} ${fmt(running[left])}, ${teamName(match, right)} ${fmt(running[right])} after ${done ? done.number : 0}`;
-}
-
-// A short account of a cycle for the recent list. `lineup` is the cycle's own (lineupsOf), so a buzz is named for the
-// player who sat in the seat that question, whoever sits there now.
-function describe(match, cycle, dc, lineup) {
-  const bits = [];
-  if (match.rules.trivia) bits.push(`[${FORMATS[dc.format] ?? dc.format}]`);
-  else if (match.rules.starterTypes.on && cycle.type !== 'normal') bits.push(`[${cycle.type}]`);
-  const name = (team, seat) => playerName(match, team, lineup[team][seat]) || `seat ${seat + 1}`;
-  cycle.buzzes.forEach(b => bits.push(`${name(b.team, b.seat)} ${RESULT_WORDS[b.result]}${dc.format === 'jackpot' ? ` clue ${(b.clue ?? 0) + 1}` : ''}`));
-  dc.streak.forEach(s => bits.push(`${name(s.team, s.seat)} streak ${s.answers}${s.wrong ? ' wrong' : ''}`));
-  cycle.lostTurn.forEach(t => bits.push(`${teamName(match, t)} lost turn`));
-  if (cycle.dead) bits.push('dead');
-  else if (bits.length === 0) bits.push('open');
-  if (dc.bonusNumber !== null) bits.push(`bonus ${dc.ownBonus[0] + dc.ownBonus[1] + dc.bounce[0] + dc.bounce[1]}`);
-  return bits.join(', ');
-}
-
 // ---- The screen ------------------------------------------------------------------------------
 
 export function renderScore(root, state, api) {
   listen(state, api);
   const sub = state.ui.sub;
   if (sub?.kind === 'cycle' && state.match.cycles.some(cycle => cycle.id === sub.cycleId)) renderCycleEditor(root, state, api);
-  else if (sub?.kind === 'rules') renderRulesEditor(root, state, api);
+  else if (sub?.kind === 'rules') renderRulesScreen(root, state, api);
   else {
     state.ui.sub = null;
     renderMain(root, state, api);
@@ -182,14 +146,14 @@ function renderMain(root, state, api) {
 
   root.append(
     topBar(c),
-    h('div', { class: 'score-layout' },
+    h('div', { class: keysAreOn() ? 'score-layout' : 'score-layout keysoff' },
       h('div', { class: 'main', 'data-stage': d.open.stage },
         h('p', { class: ui.msg ? 'statusline err' : 'statusline', id: 'statusline', role: 'status' }, ui.msg || d.lastEvent),
         picker(c),
         teamsView(c),
         h('div', { class: 'bar', id: 'bar' }, d.open.stage === 'bonus' ? bonusPanel(c) : starterBar(c)),
-        banners(c)),
-      h('aside', { class: 'side' }, legend(c), recentList(c))));
+        banners(c, endMatchFlow)),
+      h('aside', { class: 'side' }, legend(c, keysAreOn()), recentList(c))));
 }
 
 // ---- Top bar ---------------------------------------------------------------------------------
@@ -230,14 +194,16 @@ function topBar(c) {
 
 // ---- Format picker and starter types ---------------------------------------------------------
 
+// Under trivia rules the Format box, Next clue and End quarter are one row at the top on a phone, and head the right column
+// on a wider window (review 19/10/2026, change 11): the Format box's closed text names it ("Format: Normal").
 function picker(c) {
   const { match, d, api, state } = c;
-  const { open } = d;
+  const { open, phase } = d;
   const { rules } = match;
   const cycle = match.cycles.find(x => x.id === open.cycleId) ?? null;
   const editable = open.stage === 'starter';
   if (rules.trivia) {
-    const box = select(triviaFormats(rules), open.format, async value => {
+    const box = select(formatOptions(rules), open.format, async value => {
       if (tapBlocked(state)) { box.value = open.format; return; }
       api.keepAwake();
       if (value !== 'split') { c.act({ type: 'format', format: value }, {}); return; }
@@ -245,7 +211,15 @@ function picker(c) {
       if (eligible) c.act({ type: 'format', format: 'split', eligible }, {});
       else api.setUi({});
     }, { id: 'format', 'aria-label': 'Question format', disabled: !editable || hasEntry(cycle) });
-    return h('div', { class: 'picker' }, h('label', {}, h('span', {}, 'Format'), box));
+    return h('div', { class: 'picker trivia', id: 'trivia-top' }, box,
+      h('button', {
+        type: 'button', class: 'btn', id: 'next-clue', disabled: !(editable && open.format === 'jackpot' && open.cycleId),
+        onclick: c.tap(() => c.act({ type: 'nextClue' }, {})),
+      }, 'Next clue'),
+      h('button', {
+        type: 'button', class: 'btn', id: 'end-quarter', disabled: !editable || phase.regulationOver,
+        onclick: c.tap(() => endQuarterFlow(c)),
+      }, 'End quarter'));
   }
   if (rules.starterTypes.on) {
     const current = cycle?.type ?? 'normal';
@@ -305,7 +279,7 @@ function teamsView(c) {
       return h('button', {
         type: 'button', class: on ? 'seat on' : 'seat', disabled: !info.on, 'aria-pressed': String(on), 'data-team': team, 'data-seat': seat,
         'aria-label': info.name ? `${teamName(match, team)}, seat ${seat + 1}, ${info.name}${info.jailed ? ', out' : ''}, ${points} points` : `${teamName(match, team)}, seat ${seat + 1}, empty`,
-        onclick: c.tap(() => api.setUi({ selected: on ? null : { team, seat }, msg: '', streakN: 0 })),
+        onclick: c.tap(() => api.setUi({ selected: on ? null : { team, seat }, msg: '', streakN: 0, hint: null })),
       },
       h('span', { class: 'nm' }, h('span', { class: 'key' }, String(column * 4 + row + 1)), info.name ? `${info.name}${info.jailed ? ' (out)' : ''}` : 'Empty'),
       h('span', { class: 'pt' }, info.name ? fmt(points) : ''));
@@ -329,18 +303,21 @@ function formatLine({ match, d }) {
 }
 
 const promptLine = text => h('p', { class: 'hint', id: 'prompt' }, text || ' ');
+// A key printed on its button in small grey text (review change 9), shown only with a mouse and the keys on.
+const kk = key => h('span', { class: 'kk', 'aria-hidden': 'true' }, key);
+const RESULT_KEYS = { power: 'P', ten: 'C', neg: 'N', wrong: 'W' };
 
 function lostTurnButton(c, team, side) {
   const { match, d } = c;
   return h('button', {
     type: 'button', class: 'btn two', id: `lose-${side}`, 'data-team': team, disabled: !(d.open.stage === 'starter' && d.open.liveTeams[team]),
     'aria-label': `${teamName(match, team)} loses its turn`, onclick: c.tap(() => c.act({ type: 'lostTurn', team }, {})),
-  }, h('span', {}, 'Lose turn'), h('span', { class: 'sub' }, teamName(match, team)));
+  }, h('span', {}, 'Lose turn', kk(side === 'left' ? '[' : ']')), h('span', { class: 'sub' }, teamName(match, team)));
 }
 
 function starterBar(c) {
   const { match, d, ui } = c;
-  const { open, phase } = d;
+  const { open } = d;
   const { rules } = match;
   const starter = open.stage === 'starter';
   const streak = open.format === 'streak';
@@ -371,10 +348,10 @@ function starterBar(c) {
     const result = (kind, label, allowed = true) => h('button', {
       type: 'button', class: 'btn', 'data-result': kind, disabled: !(ready && allowed),
       onclick: c.tap(() => c.act({ type: 'buzz', team: sel.team, seat: sel.seat, result: kind })),
-    }, label);
+    }, label, kk(RESULT_KEYS[kind]));
     const tenLabel = String(open.clueValue ?? rules.tossup.ten);
     rows.push(
-      promptLine(starter ? (sel ? `${who}: tap the result` : stuck ? 'Nobody can answer this one: tap Dead' : 'Tap the seat that buzzed, then the result') : ''),
+      promptLine(starter ? (sel ? `${who}: tap the result` : ui.hint ?? (stuck ? 'Nobody can answer this one: tap Dead' : 'Tap the seat that buzzed, then the result')) : ''),
       h('div', { class: 'row', id: 'results' },
         rules.tossup.power != null ? result('power', `Power ${rules.tossup.power}`, open.canPower) : null,
         result('ten', tenLabel),
@@ -383,22 +360,10 @@ function starterBar(c) {
   }
   rows.push(h('div', { class: 'row', id: 'others' },
     lostTurnButton(c, leftTeam, 'left'),
-    h('button', { type: 'button', class: 'btn', id: 'dead', disabled: !starter, onclick: c.tap(() => c.act({ type: 'dead' })) }, streak ? 'Streak over' : 'Dead'),
+    h('button', { type: 'button', class: 'btn', id: 'dead', disabled: !starter, onclick: c.tap(() => c.act({ type: 'dead' })) }, streak ? 'Streak over' : 'Dead', kk('Space')),
     lostTurnButton(c, rightTeam, 'right')));
 
-  if (rules.trivia) {
-    rows.push(
-      streak ? null : h('p', { class: 'hint', id: 'formatline' }, formatLine(c)),
-      h('div', { class: 'row', id: 'trivia-row' },
-        h('button', {
-          type: 'button', class: 'btn', id: 'next-clue', disabled: !(starter && open.format === 'jackpot' && open.cycleId),
-          onclick: c.tap(() => c.act({ type: 'nextClue' }, {})),
-        }, 'Next clue'),
-        h('button', {
-          type: 'button', class: 'btn', id: 'end-quarter', disabled: !starter || phase.regulationOver,
-          onclick: c.tap(() => endQuarterFlow(c)),
-        }, 'End quarter')));
-  }
+  if (rules.trivia && !streak) rows.push(h('p', { class: 'hint', id: 'formatline' }, formatLine(c)));
   return rows;
 }
 
@@ -445,9 +410,9 @@ function bonusPanel(c) {
   });
 
   rows.push(h('div', { class: 'row' },
-    h('button', { type: 'button', class: 'btn', id: 'all-got', onclick: c.tap(() => c.act({ type: 'allGot' }, {})) }, 'All got'),
+    h('button', { type: 'button', class: 'btn', id: 'all-got', onclick: c.tap(() => c.act({ type: 'allGot' }, {})) }, 'All got', kk('A')),
     h('button', { type: 'button', class: 'btn', id: 'none-got', onclick: c.tap(() => c.act({ type: 'noneGot' }, {})) }, 'None got'),
-    h('button', { type: 'button', class: 'btn primary', id: 'bonus-done', onclick: c.tap(() => c.act({ type: 'closeBonus' }, {})) }, 'Done')));
+    h('button', { type: 'button', class: 'btn primary', id: 'bonus-done', onclick: c.tap(() => c.act({ type: 'closeBonus' }, {})) }, 'Done', kk('Enter'))));
   rows.push(h('div', { class: 'row' },
     h('button', { type: 'button', class: 'btn', id: 'bonus-number', onclick: c.tap(() => setBonusNumber(c)) }, 'Set number'),
     rules.bonus.passRest ? h('button', { type: 'button', class: 'btn', id: 'pass-rest', disabled: !bonus.canPassRest, onclick: c.tap(() => c.act({ type: 'passRest' }, {})) }, 'Pass rest') : null,
@@ -492,7 +457,7 @@ async function enterBonusTotal(c) {
 async function endQuarterFlow(c) {
   const choice = await c.api.ask({
     title: `End quarter ${c.d.phase.quarter}?`,
-    body: ['Score check, to read out or copy:', copyLine(checkLine(c.match, c.d))],
+    body: ['Score check, to read out or copy:', ...copyLine(checkLine(c.match, c.d))],
     buttons: [{ label: 'End quarter', value: 'end', primary: true }, { label: 'Cancel', value: 'cancel' }],
   });
   if (choice === 'end') c.act({ type: 'endQuarter' });
@@ -511,9 +476,11 @@ async function halftimeFlow(c) {
   }
   const match = c.state.match;
   const d = derive(match);
+  closeHalftimeBox(match.id, d.phase.halftimeAfterCycleId);   // this dialog is the score check, so the box over the page does not follow it
+  refreshClock(c.state, c.api);
   await c.api.ask({
     title: 'Halftime',
-    body: ['Score check, to read out or copy:', copyLine(checkLine(match, d, d.phase.halftimeAfterCycleId)), backupButton(c.api)],
+    body: ['Score check, to read out or copy:', ...copyLine(checkLine(match, d, d.phase.halftimeAfterCycleId)), backupButton(c.api)],
     buttons: [{ label: 'Close', value: 'cancel' }],
   });
 }
@@ -575,171 +542,6 @@ async function endMatchFlow(c) {
   body.push('You can undo this straight afterwards.');
   const choice = await api.ask({ title: 'End the match?', body, buttons: [{ label: 'End match', value: 'end', primary: true }, { label: 'Cancel', value: 'cancel' }] });
   if (choice === 'end') c.act(actions);
-}
-
-// ---- The clock (v2 3.3) ----------------------------------------------------------------------
-// The top bar has a fixed slot for the clock, so no button moves whatever it says. Without a countdown it shows
-// the time since the clock first started ("12:34", "0:00" before). With one it is a button: "Start clock" before
-// the first start, then the time left ("3:21 left"), "Paused" while stopped and "+0:12" once over; a tap starts
-// or pauses the clock. When the match has ended it shows the game's length and stops. Every figure is worked out
-// from the record at api.now() (v2 1.3, 1.8), never by counting ticks, so a locked phone or a reload still
-// reads right. The one 1 s ticker repaints the slot's text and the overlays; it never redraws the screen.
-
-const clockRulesOf = match => ({ ...defaultClockRules(), ...match.rules.clock });
-
-// The time left, counted down to 0:00 (so the last second reads 0:01), and counting on as "+0:12" once over.
-function leftText(leftMs) {
-  if (leftMs > 0) return `${formatLength(Math.ceil(leftMs / 1000) * 1000)} left`;
-  if (leftMs === 0) return '0:00 left';
-  return `+${formatLength(Math.floor(-leftMs / 1000) * 1000)}`;
-}
-
-// With no countdown it is the time played, which stands still while the clock is paused (Tom, 19/10/2026), up to the
-// last question closed once the match is over.
-function slotText(match, d, now) {
-  const count = countdownState(match, now);
-  if (d.phase.ended) return formatLength((count === null ? timeSummary(match, d).played : null) ?? timeSummary(match, d).game);
-  if (count === null) return formatLength(Math.max(0, played(match, now) ?? 0));
-  if (!(match.clock ?? []).some(event => event.type === 'start')) return 'Start clock';
-  return count.running ? leftText(count.left) : 'Paused';
-}
-
-function clockSlot(c) {
-  const { match, d, api } = c;
-  const now = api.now();
-  const text = slotText(match, d, now);
-  if (countdownState(match, now) === null || d.phase.ended) return h('div', { class: 'clockslot', id: 'clock-slot', role: 'timer' }, text);
-  return h('button', {
-    type: 'button', class: 'btn clockslot', id: 'clock-slot', title: 'Tap to start or pause the clock',
-    onclick: () => c.act({ type: 'clock', run: !clockRunning(c.state.match) }, {}),
-  }, text);
-}
-
-// What the person has closed or the sound has already marked, for this page load only. A banner is keyed by its
-// match and period, a timeout box by its marker and the marker's time, so each comes back for the next one.
-const timeUi = { closed: new Set(), seen: new Set(), rung: new Set(), gong: new Map() };
-
-// The gong plays once per period, when the time left first reaches 0: a period that is already over when the page
-// first looks at it (a reload) makes no sound, and an undo that puts time back does not make it ring twice.
-function watchGong(match, count) {
-  if (count === null) return;
-  const key = `${match.id}|${count.period}`;
-  const seen = timeUi.gong.get(key);
-  if (count.left > 0) {
-    if (seen === undefined) timeUi.gong.set(key, 'before');
-  } else if (seen !== 'done') {
-    timeUi.gong.set(key, 'done');
-    if (seen === 'before') gong();
-  }
-}
-
-const bannerWords = (match, count) => {
-  if (count.perHalf && count.period === 1) return 'End of the first half: press Halftime';
-  return match.rules.atTime === 'stopNow' ? 'Gong: press Time called' : 'Time: finish the question, then press Time called';
-};
-
-// The banner at 0:00, or null: nothing ends by itself, so it stays until it is closed, or Halftime (the next
-// period begins) or Time called is pressed, and does not come back for that period.
-function bannerBox(match, d, now) {
-  const count = countdownState(match, now);
-  if (count === null || count.left > 0 || d.phase.ended || match.markers.some(m => m.type === 'timeCalled')) return null;
-  const key = `${match.id}|${count.period}`;
-  return timeUi.closed.has(key) ? null : { id: 'time-banner', closeId: 'time-banner-close', key, text: bannerWords(match, count) };
-}
-
-// The latest timeout's box, or null: its time left comes from the marker's own time. It stays at 0:00 until
-// closed if it was seen counting; one that ended before the page looked (a reload) is not brought back.
-function timeoutBox(match, now) {
-  const marker = match.markers.filter(m => m.type === 'timeout' && Number.isFinite(m.at)).sort((a, b) => a.at - b.at).at(-1);
-  if (!marker) return null;
-  const key = `${match.id}|${match.markers.indexOf(marker)}|${marker.at}|${marker.team}`;
-  if (timeUi.closed.has(key)) return null;
-  const length = clockRulesOf(match).timeoutSeconds * 1000;
-  const remaining = Math.min(length, marker.at + length - now);
-  if (remaining > 0) timeUi.seen.add(key);
-  else if (!timeUi.seen.has(key)) return null;
-  else if (!timeUi.rung.has(key)) {
-    timeUi.rung.add(key);
-    beep();
-  }
-  return { id: 'timeout-box', closeId: 'timeout-close', key, name: `Timeout: ${teamName(match, marker.team)}`, left: formatLength(Math.max(0, Math.ceil(remaining / 1000) * 1000)) };
-}
-
-// The boxes sit in one fixed layer at the bottom of the screen, outside the page that is redrawn, so a box is
-// only ever added, repainted or removed: no button moves, and a tap on Close is never lost to a redraw.
-function buildBox(box, state, api) {
-  const close = h('button', {
-    type: 'button', class: 'btn', id: box.closeId,
-    onclick: () => { timeUi.closed.add(box.key); refreshClock(state, api); },
-  }, 'Close');
-  if (box.id === 'time-banner') {
-    return h('div', { class: 'timebox', id: box.id, 'data-key': box.key, role: 'status' }, h('span', { class: 'timetext' }, box.text), close);
-  }
-  return h('div', { class: 'timebox', id: box.id, 'data-key': box.key, role: 'group', 'aria-label': box.name },
-    h('span', { class: 'timetext' }, box.name), h('span', { class: 'timeleft', id: 'timeout-left', role: 'timer' }, box.left), close);
-}
-
-function syncTimeLayer(state, api, wanted) {
-  let layer = document.getElementById('timelayer');
-  if (wanted.length === 0) {
-    layer?.remove();
-    return;
-  }
-  if (!layer) {
-    layer = h('div', { class: 'timelayer', id: 'timelayer' });
-    document.body.append(layer);
-  }
-  for (const el of [...layer.children]) {
-    if (!wanted.some(box => box.id === el.id && box.key === el.dataset.key)) el.remove();
-  }
-  for (const box of wanted) {
-    const el = document.getElementById(box.id);
-    if (!el) layer.append(buildBox(box, state, api));
-    else if (box.left !== undefined) {
-      const left = el.querySelector('.timeleft');
-      if (left.textContent !== box.left) left.textContent = box.left;
-    }
-  }
-  const order = wanted.map(box => box.id);
-  if ([...layer.children].map(el => el.id).join() !== order.join()) for (const id of order) layer.append(document.getElementById(id));
-}
-
-// Reads the clock once: repaints the slot's text, rings the gong if its time has come, and shows or removes the
-// banner and the timeout box (not above the cycle or rules editor, which the boxes would sit over).
-function refreshClock(state, api) {
-  const { match } = state;
-  if (!match || state.screen !== 'score') return;
-  const now = api.now();
-  const d = derive(match);
-  const slot = document.getElementById('clock-slot');
-  if (slot) {
-    const text = slotText(match, d, now);
-    if (slot.textContent !== text) slot.textContent = text;
-  }
-  watchGong(match, countdownState(match, now));
-  syncTimeLayer(state, api, state.ui.sub ? [] : [timeoutBox(match, now), bannerBox(match, d, now)].filter(Boolean));
-}
-
-const ticker = { timer: null, live: null };
-
-function tickClock() {
-  const live = ticker.live;
-  if (!live) return;
-  if (live.state.screen !== 'score' || !live.state.match) stopClockTicker();
-  else refreshClock(live.state, live.api);
-}
-
-function startClockTicker(state, api) {
-  ticker.live = { state, api };
-  if (ticker.timer === null) ticker.timer = setInterval(tickClock, 1000);
-}
-
-// Called by the page when the scoring screen is left: the timer goes, and so do the boxes over the screen.
-export function stopClockTicker() {
-  if (ticker.timer !== null) clearInterval(ticker.timer);
-  ticker.timer = null;
-  ticker.live = null;
-  document.getElementById('timelayer')?.remove();
 }
 
 // "Timeout: <team>" from the menu. A team over the rules' limit is asked first, naming the rule (v2 3.3).
@@ -897,89 +699,3 @@ function openBoard(c) {
   try { opened = window.open('./#board', 'scorer-board'); } catch { opened = null; }
   if (!opened) c.say('The room board could not open a window. Allow pop-ups, or open this page in a second tab and press Room board on Home.');
 }
-
-// ---- Banners (phase announcements), below the action bar so nothing above them moves ---------
-
-function banner(title, lines, ...extras) {
-  return h('div', { class: 'banner' }, h('b', {}, title), [lines].flat().map(text => h('p', {}, text)), ...extras);
-}
-
-function banners(c) {
-  const { match, d, api } = c;
-  const { phase, open } = d;
-  const { rules } = match;
-  const last = d.cycles.at(-1);
-  const out = [];
-  const markerHere = type => match.markers.some(m => m.type === type && last && m.afterCycleId === last.id);
-
-  if (phase.ended) {
-    out.push(banner('Match ended', resultLine(match, d), backupButton(api),
-      h('div', { class: 'row' },
-        h('button', { type: 'button', class: 'btn', onclick: () => api.go('sheet') }, 'Scoresheet and stats'),
-        h('button', { type: 'button', class: 'btn', onclick: () => api.go('home') }, 'Home'))));
-  } else {
-    if (open.stage === 'awaitingEnd') {
-      const tie = d.scores[0] === d.scores[1];
-      out.push(banner('Regulation is over', tie ? 'The scores are level and these rules have no overtime, so the match ends as a tie.' : 'The scores are not level, so the match can only be ended.',
-        h('button', { type: 'button', class: 'btn primary', id: 'banner-end', onclick: () => endMatchFlow(c) }, 'End match')));
-    } else if (phase.overtime) {
-      const text = phase.overtime.mode === 'threeStarters'
-        ? `Overtime: the scores are level. Three starters with no bonuses, then sudden death. This is starter ${phase.overtime.index} of 3.`
-        : 'Overtime: the scores are level. Sudden death, with no bonuses: the first score that breaks the tie ends the match.';
-      out.push(banner('Overtime', text));
-    } else if (match.markers.some(m => m.type === 'timeCalled')) {
-      out.push(banner('Time called', open.afterTimeBuzz ? 'One buzz already in may still be answered. Score it, or mark the question dead.' : 'Finish the question that is open. No new question follows unless the scores are level.'));
-    }
-    if (phase.lightning && !phase.regulationOver) out.push(banner('Lightning section', 'Bonus rounds are over. Score as normal until time is called (these rules are unverified).'));
-    if (last && phase.halftimeAfterCycleId === last.id) {
-      out.push(banner('Halftime', 'Score check, to read out or copy:', copyLine(checkLine(match, d, last.id)), backupButton(api)));
-    }
-    if (rules.trivia && markerHere('quarter')) {
-      const quarters = match.markers.filter(m => m.type === 'quarter').length;
-      out.push(banner(`Quarter ${quarters} ended`, 'Score check, to read out or copy:', copyLine(checkLine(match, d, last.id)), backupButton(api)));
-    }
-  }
-
-  const awake = api.wakeStatus();
-  if (awake === 'lost') {
-    out.push(h('div', { class: 'banner' }, h('button', { type: 'button', class: 'btn', id: 'wake-ask', onclick: () => api.keepAwake() }, 'Tap to keep screen awake')));
-  } else if (awake === 'hint') {
-    out.push(banner('The screen may switch itself off', 'Set Auto-Lock to Never (iPhone: Settings, then Display & Brightness, then Auto-Lock) while you are scoring.'));
-  }
-  return h('div', { class: 'banners', id: 'banners' }, out);
-}
-
-// ---- Laptop side: key legend and recent questions --------------------------------------------
-
-function legend(c) {
-  const { match } = c;
-  const { rules } = match;
-  const items = [['1–4, 5–8', 'Seats: left team, right team']];
-  if (rules.tossup.power != null) items.push(['P', 'Power']);
-  items.push(['C', 'Correct']);
-  if (!rules.trivia) items.push(['N', 'Neg']);
-  items.push(['W', 'Wrong'], ['Space', 'Dead question'], ['[  ]', 'Left, right team loses its turn']);
-  if (!rules.trivia && rules.bonus.parts > 0) {
-    items.push(['J K L', rules.bonus.bounce != null ? 'Bonus parts got (then the other team)' : 'Bonus parts got'], ['A', 'All parts got'], ['Enter', 'Close the bonus']);
-  }
-  if (rules.starterTypes.on) items.push(['T', 'Change the starter type']);
-  items.push(['G', 'Time called'], ['Ctrl/Cmd+Z', 'Undo'], ['+ Shift', 'Redo'], ['Esc', 'Cancel']);
-  return h('div', {}, h('h2', {}, 'Keys'),
-    keysAreOn() ? null : h('p', { class: 'hint' }, 'Single-key shortcuts are off (Menu, then More). Undo and redo still work.'),
-    h('dl', { class: 'legend', id: 'legend' }, items.flatMap(([keys, text]) => [h('dt', {}, keys), h('dd', {}, text)])));
-}
-
-function recentList(c) {
-  const { match, d, api } = c;
-  const [left, right] = leftRight(match);
-  const lineups = lineupsOf(match);
-  const rows = d.cycles.slice(-10).reverse().map(dc => h('button', {
-    type: 'button', class: 'btn rc', 'data-cycle': dc.id, onclick: () => api.setUi({ sub: { kind: 'cycle', cycleId: dc.id }, selected: null }),
-  },
-  h('span', { class: 'what' }, `Q${dc.number} ${describe(match, match.cycles[dc.number - 1], dc, lineups[dc.number - 1])}`),
-  h('span', { class: 'run' }, `${fmt(dc.running[left])}–${fmt(dc.running[right])}`),
-  dc.flags.length > 0 ? h('span', { class: 'flag' }, dc.flags.map(flagText).join('; ')) : null));
-  return h('div', { class: 'recent', id: 'recent' }, h('h2', {}, 'Recent questions'),
-    rows.length > 0 ? rows : h('p', { class: 'hint' }, 'None yet.'));
-}
-
