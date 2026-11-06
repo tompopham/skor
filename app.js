@@ -854,7 +854,7 @@ function clashCard({ incoming, existing, decision }) {
 
 // Home (review 19/10/2026, change 10; Tom's decision 10): New match first; a match still being played is one two-line Resume
 // button, and one that has ended is a "Last match" line with its Scoresheet; then Past matches, Room board and the two
-// backup buttons in a 2 x 2 grid.
+// backup buttons in a 2 x 2 grid, and under it the link to the TD check page.
 function renderHome(root, state) {
   const current = getCurrent();
   const saved = current ? loadMatch(current) : null;
@@ -876,6 +876,8 @@ function renderHome(root, state) {
       h('button', { class: 'btn', id: 'room-board', onclick: () => go('board') }, 'Room board'),
       h('button', { class: 'btn', id: 'load-backup', onclick: () => picker.click() }, 'Load backup file'),
       h('button', { class: 'btn', id: 'paste-backup', onclick: pasteBackup }, 'Paste backup text')),
+    // The TD check page (SPEC-partB 4.2): its own page, a plain link so it reads as a way out of the scorer, not a mode.
+    h('a', { class: 'tdlink', id: 'td-link', href: 'td.html' }, 'Check a tournament\'s game files'),
     picker,
     state.ui.loadError ? h('p', { class: 'msg', id: 'load-error' }, state.ui.loadError) : null,
     state.ui.clash ? clashCard(state.ui.clash) : null);
