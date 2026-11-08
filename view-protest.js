@@ -125,6 +125,9 @@ const CSS = `
 const CANCEL = { label: 'Cancel', value: 'cancel' };
 const parts = count => Array.from({ length: count }, (_, i) => i + 1);
 
+// Protest's "which part?" as one row (review 19/10/2026, change 18): Tossup | Bonus 1 | Bonus 2 | Bonus 3.
+export const partChoices = count => [{ label: 'Tossup', value: 'tossup' }, ...parts(count).map(n => ({ label: `Bonus ${n}`, value: `part${n}` }))];
+
 // How many bonus parts a protest can name on this cycle: the rules' parts when it has a bonus, or had one thrown out (with the
 // bonus, or with its tossup); none otherwise, and then only the tossup can be protested.
 const bonusPartsOf = (match, cycle) => (cycle.bonus || (cycle.thrownOut ?? []).some(entry => entry.part === 'bonus' || entry.original?.bonus) ? match.rules.bonus.parts : 0);
@@ -148,7 +151,7 @@ export async function protestFlow({ api, match, cycleId }) {
   const dc = derive(match).cycles[index];
 
   const teamChoice = await api.ask({
-    title: `Protest on Q${dc.number}: which team?`,
+    title: `Protest on Q${dc.number}: which team?`, row: 2,   // the two teams side by side, the left team on the left (change 18)
     buttons: [...leftRight(match).map(t => ({ label: teamName(match, t), value: `team${t}` })), CANCEL],
   });
   if (teamChoice !== 'team0' && teamChoice !== 'team1') return false;
@@ -158,8 +161,8 @@ export async function protestFlow({ api, match, cycleId }) {
   const bonusParts = bonusPartsOf(match, cycle);
   if (bonusParts > 0) {
     const partChoice = await api.ask({
-      title: `Protest on Q${dc.number}: which part?`,
-      buttons: [{ label: 'Tossup', value: 'tossup' }, ...parts(bonusParts).map(n => ({ label: `Bonus part ${n}`, value: `part${n}` })), CANCEL],
+      title: `Protest on Q${dc.number}: which part?`, row: bonusParts + 1,
+      buttons: [...partChoices(bonusParts), CANCEL],
     });
     if (/^part[1-9]$/.test(partChoice ?? '')) part = Number(partChoice.slice(4));
     else if (partChoice !== 'tossup') return false;
@@ -173,7 +176,7 @@ export async function protestFlow({ api, match, cycleId }) {
   const body = h('div', { class: 'protestform' }, field('Who protested', who), field('Points at stake', points), field('What the protest says', says), note);
   for (;;) {
     const choice = await api.ask({
-      title: `Protest on ${questionWords(dc, part)}: ${teamName(match, team)}`, body,
+      title: `Protest on ${questionWords(dc, part)}: ${teamName(match, team)}`, body, first: true,   // above the boxes, clear of an iPhone's keyboard
       buttons: [{ label: 'Record protest', value: 'ok', primary: true }, CANCEL],
     });
     if (choice !== 'ok') return false;
@@ -199,9 +202,15 @@ function standing(match, cycle) {
   });
 }
 
-// Throw out: the tossup or the bonus (asked unless `part` is given: the editor's two buttons name it), then for a tossup whether the
-// replacement is for both teams or one, for a bonus which part went wrong; one throwOut action, one version, so Undo brings the original
-// back. `patch` goes to the screen with the action, and `say` is told a refusal's reason. Resolves whether it was thrown out.
+// How Throw out from the menu begins (review 19/10/2026, change 18): 'choose' asks the tossup or the bonus, when the question has
+// one; with no bonus there is nothing to choose, so 'team' goes straight to the both-teams-or-one card (which has Cancel), and
+// 'confirm', when nothing stands for either team, asks once "Throw out the tossup on Q6?".
+export const throwOutStart = (match, cycle) => (cycle.bonus ? 'choose' : standing(match, cycle).length > 0 ? 'team' : 'confirm');
+
+// Throw out: the tossup or the bonus (asked unless `part` is given: the editor's two buttons name it, and unless the question has no
+// bonus), then for a tossup whether the replacement is for both teams or one, for a bonus which part went wrong; one throwOut action,
+// one version, so Undo brings the original back. `patch` goes to the screen with the action, and `say` is told a refusal's reason.
+// Resolves whether it was thrown out.
 export async function throwOutFlow({ api, match, cycleId, part = null, patch = {}, say = () => {} }) {
   const index = match.cycles.findIndex(c => c.id === cycleId);
   if (index < 0) return false;
@@ -209,10 +218,17 @@ export async function throwOutFlow({ api, match, cycleId, part = null, patch = {
   const q = `Q${derive(match).cycles[index].number}`;
 
   if (part === null) {
-    part = await api.ask({
-      title: `Throw out on ${q}: the tossup or the bonus?`,
-      buttons: [{ label: 'The tossup', value: 'tossup' }, ...(cycle.bonus ? [{ label: 'The bonus', value: 'bonus' }] : []), CANCEL],
-    });
+    const start = throwOutStart(match, cycle);
+    if (start === 'choose') {
+      part = await api.ask({
+        title: `Throw out on ${q}: the tossup or the bonus?`,
+        buttons: [{ label: 'The tossup', value: 'tossup' }, { label: 'The bonus', value: 'bonus' }, CANCEL],
+      });
+    } else if (start === 'team') part = 'tossup';
+    else {
+      const choice = await api.ask({ title: `Throw out the tossup on ${q}?`, buttons: [{ label: 'Throw out', value: 'tossup', primary: true }, CANCEL] });
+      part = choice === 'tossup' ? 'tossup' : 'cancel';
+    }
   }
   let action;
   if (part === 'tossup') {
@@ -273,7 +289,7 @@ export function protestControls({ api, getMatch, d, cycleId, index, patch = {}, 
       return;
     }
     if (next === 'upheld') {
-      await api.ask({ title: 'Protest upheld', body: 'A protest never changes the score. Fix the question with Edit.', buttons: [{ label: 'OK', value: 'ok', primary: true }] });
+      await api.ask({ title: 'Protest upheld', body: 'A protest never changes the score. Fix the question with Edit.', buttons: [{ label: 'Close', value: 'cancel', primary: true }] });
     }
   });
 

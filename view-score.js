@@ -6,12 +6,12 @@
 // banner at 0:00 and the timeout box (v2 3.3) are here too: they show what clock.js works out from the
 // record at api.now(), and the one 1 s ticker only repaints their text. Who sits in a seat is the line-up's
 // (v2 4.4; lineup.js): the seat buttons show the player sitting now, the recent list the player who sat in
-// each question, and the menu's Swap players asks for the team, the seat and who comes in. The menu's Protest and Throw
+// each question, and the menu's Swap players starts the two cards in view-swap.js. The menu's Protest and Throw
 // out (v2 5) start the dialogs in view-protest.js, which also words the bonus panel's floor and ceiling after a bonus throw-out.
 
 import { derive, applyAction, FORMATS } from './engine.js';
 import { keyToCommand, tapGuard, sittingNow } from './keys.js';
-import { playersOf, playerName } from './lineup.js';
+import { playerName } from './lineup.js';
 import { loadSettings, saveSettings } from './storage.js';
 import { clockRunning, timeoutsUsed } from './clock.js';
 import { unlockSound } from './sound.js';
@@ -22,6 +22,7 @@ import {
 import { renderCycleEditor } from './view-editor.js';
 import { renderRulesScreen } from './view-rules.js';
 import { protestFlow, throwOutFlow, boundsWords } from './view-protest.js';
+import { swapFlow } from './view-swap.js';
 import { menuModel, showMenu } from './view-menu.js';
 import { legend, recentList } from './view-side.js';
 import {
@@ -560,98 +561,7 @@ async function takeTimeout(c, team) {
   c.act({ type: 'timeout', team }, {});
 }
 
-// ---- Swap players (v2 4.4) -------------------------------------------------------------------
-// Menu, Swap players: the team, the seat, then who comes in (a bench player or a starter who is not sitting, the
-// seat left empty, or a new name typed in, which joins the bench). Each step is a dialog, and Cancel or the back
-// button on any of them ends it with nothing recorded. A new name is added to the bench and swapped in as one
-// version, so one Undo takes both back. The engine alone decides: a swap outside the rules' windows comes back
-// refused with the rules' words, the page asks, and Record sends it again as confirmed.
-
-const WINDOW_WORDS = { halftime: 'at halftime', beforeOvertime: 'before overtime', timeout: 'after a timeout', quarter: 'between quarters' };
 const CANCEL = { label: 'Cancel', value: 'cancel' };
-
-// "UK quizbowl allows swaps only at halftime or before overtime (ACF C.12). Record it anyway?" The bracket is left
-// out when the rules cite no clause, and rules with no window at all say so.
-function outsideWindowText(match, { windows, source }) {
-  const name = match.rules.name || 'These rules';
-  const clause = source ? ` (${source})` : '';
-  const words = (windows ?? []).map(kind => WINDOW_WORDS[kind] ?? kind);
-  if (words.length === 0) return `${name} has no swap window${clause}. Record it anyway?`;
-  const list = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} or ${words.at(-1)}`;
-  return `${name} allows swaps only ${list}${clause}. Record it anyway?`;
-}
-
-// The name of a player who is not on the bench yet, typed in a box; asks again until there is one. undefined if cancelled.
-async function askNewName(api) {
-  const input = h('input', {
-    type: 'text', maxlength: 40, autocomplete: 'off', autocapitalize: 'words', autocorrect: 'off', spellcheck: 'false', 'aria-label': "New player's name",
-  });
-  const note = h('p', { class: 'msg' });
-  for (;;) {
-    const choice = await api.ask({
-      title: 'New player', body: ['The new player joins the bench and takes the seat.', input, note],
-      buttons: [{ label: 'Swap in', value: 'ok', primary: true }, CANCEL],
-    });
-    if (choice !== 'ok') return undefined;
-    const name = input.value.trim();
-    if (name !== '') return name;
-    note.textContent = 'Type a name.';
-  }
-}
-
-async function swapFlow(c) {
-  const { match, api } = c;
-  const teamChoice = await api.ask({
-    title: 'Swap players: which team?',
-    buttons: [...leftRight(match).map(t => ({ label: teamName(match, t), value: `team${t}` })), CANCEL],
-  });
-  if (teamChoice !== 'team0' && teamChoice !== 'team1') return;
-  const team = Number(teamChoice.slice(4));
-
-  const seatChoice = await api.ask({
-    title: `Swap players: ${teamName(match, team)}, which seat?`,
-    buttons: [...[0, 1, 2, 3].map(seat => ({ label: `Seat ${seat + 1}: ${c.who(team, seat) || 'empty'}`, value: `seat${seat}` })), CANCEL],
-  });
-  if (!/^seat[0-3]$/.test(seatChoice ?? '')) return;
-  const seat = Number(seatChoice.slice(4));
-
-  // Everyone the team has who is not in a seat now: the bench, and starters who have gone off. A name used twice says which is which.
-  const candidates = playersOf(match, team).filter(p => !c.seats[team].includes(p.id));
-  const label = p => (candidates.filter(other => other.name === p.name).length > 1
-    ? `${p.name} (${p.seat === null ? 'bench' : `started in seat ${p.seat + 1}`})` : p.name);
-  const here = c.who(team, seat);
-  const who = await api.ask({
-    title: `Seat ${seat + 1}: who comes in?`,
-    body: here ? `${here} is in seat ${seat + 1} now.` : `Seat ${seat + 1} is empty.`,
-    buttons: [
-      ...candidates.map(p => ({ label: label(p), value: `player:${p.id}` })),
-      { label: 'Leave the seat empty', value: 'empty', disabled: here === '' },
-      { label: 'Someone new', value: 'new' }, CANCEL,
-    ],
-  });
-  let player = null;
-  let name;
-  if (who === 'new') {
-    name = await askNewName(api);
-    if (name === undefined) return;
-    player = `b${(match.teams[team].bench ?? []).length}`;
-  } else if (typeof who === 'string' && who.startsWith('player:')) player = who.slice('player:'.length);
-  else if (who !== 'empty') return;
-
-  const swap = { type: 'sub', team, seat, player };
-  const actions = name === undefined ? [swap] : [{ type: 'addBench', team, name }, swap];
-  const patch = { selected: null, streakN: 0 };
-  let result = api.dispatchAll(actions, patch);
-  if (!result.ok && result.error.code === 'outside-window') {
-    const choice = await api.ask({
-      title: 'Swap outside the window?', body: outsideWindowText(match, result.error),
-      buttons: [{ label: 'Record', value: 'record' }, CANCEL],
-    });
-    if (choice !== 'record') return;
-    result = api.dispatchAll(actions.map(action => (action.type === 'sub' ? { ...action, confirmed: true } : action)), patch);
-  }
-  if (!result.ok) c.say(refusalText(result.error));
-}
 
 // ---- Menu ------------------------------------------------------------------------------------
 

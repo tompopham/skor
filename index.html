@@ -82,6 +82,9 @@ td.n, th.n { text-align: right; }
 @media (max-width: 899px) { .keys { display: none; } }
 .dialog { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: grid; place-items: center; padding: 16px; }
 .dialog .card { max-width: 420px; width: 100%; }
+/* Scrolling inside a dialog stops at its ends: the page behind never scrolls, and is never left moved (review 19/10/2026,
+   change 17). */
+.dialog, .dialog .card { overscroll-behavior: contain; }
 
 /* Save status, above every screen. */
 .notice { border: 1px solid var(--bad); color: var(--bad); padding: 8px; margin-top: 8px; display: grid; gap: 6px; overflow-wrap: anywhere; }
@@ -152,7 +155,9 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 .trow { display: grid; grid-template-columns: 20px minmax(0, 1fr) 88px; gap: 4px; align-items: stretch; }
 .trow .gut { align-self: center; text-align: center; font-size: 14px; color: var(--muted); }
 .trow .btn { min-width: 0; padding: 0 6px; }
-.trow.bench input { grid-column: 2 / -1; }
+.trow > input:last-child { grid-column: 2 / -1; }   /* a seat or bench box runs to the card's edge (Captain went in 1.9.0) */
+/* Two seats whose names look alike (review 19/10/2026, change 19): a 2 px border on both boxes, and one short line under seat 4. */
+.trow input.alike { border: 2px solid var(--fg); }
 .tbold { font-weight: bold; }
 .benchrows { display: grid; gap: 4px; }
 .benchrows[hidden] { display: none; }
@@ -178,6 +183,14 @@ details.fold.shut:not([open]) { display: none; }
 .stack { display: grid; gap: 6px; }
 .stack .btn { width: 100%; text-align: left; min-height: 48px; }
 .dtext { margin: 0; overflow-wrap: anywhere; }
+/* Choices side by side (review 19/10/2026, change 18): a dialog's first buttons in one row (Which team?, left team on the left;
+   Which part?), and Swap players' two columns, the teams' seats as on the scoring screen, then who comes in. */
+.stack .rowof { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; }
+.stack .rowof .btn { text-align: center; padding: 0 6px; overflow-wrap: anywhere; }
+.cols2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; align-items: start; min-width: 0; }
+.cols2 .col { display: grid; gap: 6px; min-width: 0; }
+.cols2 h3 { margin: 0; font-size: 14px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cols2 .btn { width: 100%; min-width: 0; text-align: left; padding: 0 8px; overflow-wrap: anywhere; }
 /* A dialog with a fixed header (ask's `head`): the title, with Close at the right (and a way back at the left), stays at
    the top while the card scrolls. The menu's card (review 19/10/2026, change 2) is fixed to the top of the screen, and from
    640 px is wider, with its three groups side by side; on a phone two buttons share a row. A greyed button keeps its label
@@ -269,6 +282,13 @@ details.fold.shut:not([open]) { display: none; }
   .main[data-stage="bonus"] .seat:nth-of-type(4) { grid-row: 9; }
   .main[data-stage="bonus"] > .banners { grid-column: 1 / -1; grid-row: 10; }
 }
+/* A phone (review 19/10/2026, change 16): the result buttons have 6 px at each side, so "Power 15" is one line in an 83 px
+   button; the Dead row is 1fr 2fr 1fr, so Dead, used every few questions, is the big target, and Lose turn, used rarely, the
+   small one (84, 168 and 84 px on a 375 px phone). From 640 px Dead already has a row of its own. */
+@media (max-width: 639px) {
+  #results > .btn { padding: 0 6px; }
+  #others { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr); gap: 4px; }
+}
 /* Key hints (review 19/10/2026, change 9): the seat numbers, J K L and the key printed on each button show whenever there is a
    mouse, whatever the width, and never on a touch screen or with the single-key shortcuts off. */
 @media (hover: none), (pointer: coarse) { .seat .key, .part .kh, .kk { display: none; } }
@@ -340,6 +360,9 @@ html:has(#app[data-screen="score"]) { scrollbar-gutter: stable; }
 .scoretop .acts { grid-area: acts; }
 .clockslot { display: grid; place-items: center; margin: 0; height: 48px; padding: 0 8px; border: 1px solid var(--line); background: var(--bg); font: bold 18px/1.2 Arial, Helvetica, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 button.clockslot { background: var(--btn); }
+/* Without a countdown the slot is only a reading, so it is plain 18 px text with no box, which no one takes for a button
+   (review 19/10/2026, change 16). It keeps its 48 px, so nothing moves when a countdown starts. */
+div.clockslot { border: 0; font-size: 18px; }
 @media (max-width: 639px) {
   .top.scoretop { position: relative; }
   .scoretop .clockslot { position: absolute; right: 0; top: calc(100% + 9px); width: 124px; }
@@ -347,15 +370,19 @@ button.clockslot { background: var(--btn); }
 }
 @media (min-width: 640px) {
   .top.scoretop { grid-template-columns: minmax(0, 1fr) 150px auto; grid-template-areas: "title clock acts"; }
-  .scoretop .clockslot { grid-area: clock; font-size: 20px; }
+  .scoretop .clockslot { grid-area: clock; }
+  .scoretop button.clockslot { font-size: 20px; }
 }
-/* The banner at 0:00 and the timeout box: a layer fixed to the bottom of the screen, over the page and not in it, so
-   no button moves when one appears. The layer lets taps through; only its boxes take them. Below the dialogs (10). */
+/* The banner at 0:00, the timeout box, the halftime box and the screen-lock line: a layer fixed to the bottom of the screen,
+   over the page and not in it, so no button moves when one appears. The layer lets taps through; only its boxes take them. Below the dialogs (10). */
 .timelayer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: grid; gap: 6px; max-width: 900px; margin: 0 auto; padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px)); pointer-events: none; }
 .timebox { pointer-events: auto; display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; background: var(--bg); border: 2px solid var(--fg); }
 .timebox .timetext { flex: 1 1 0; min-width: 0; font-weight: bold; overflow-wrap: anywhere; }
 .timebox .timeleft { flex: none; font: bold 28px/1 Arial, Helvetica, sans-serif; font-variant-numeric: tabular-nums; }
 .timebox .btn { flex: none; min-width: 80px; }
+/* The screen-lock line (review 19/10/2026, changes 16 and 23; Tom's decision 13): in this layer, so it is always on screen and
+   nothing moves; one line and its button, Keep awake or Hide. */
+.timebox.wakebox { border-width: 1px; }
 /* The halftime box (review change 22): the title with its Close at the top, then the score line, Copy and a backup. */
 .timebox.halfbox { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 6px; padding: 6px 10px 10px; }
 .halfbox .halfhead { display: flex; align-items: center; gap: 8px; }
@@ -395,13 +422,22 @@ button.clockslot { background: var(--btn); }
 .board-phase { font-size: clamp(18px, 3.4vw, 44px); min-height: 1.3em; overflow-wrap: anywhere; }
 .board-teams { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-content: center; align-items: center; }
 .board-team { min-width: 0; display: grid; gap: 8px; text-align: center; }
-.board-name { font-size: clamp(20px, 4.2vw, 64px); font-weight: bold; line-height: 1.15; height: calc(2.3em + 3px); border-bottom: 3px solid var(--fg); overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.board { --nm: clamp(20px, 4.2vw, 64px); }
+.board-name { font-size: var(--nm); font-weight: bold; line-height: 1.15; height: calc(var(--nm) * 2.3 + 3px); border-bottom: 3px solid var(--fg); overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .board-score { font-size: min(17vw, 34vh); font-weight: bold; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .board-last { font-size: clamp(18px, 3vw, 40px); min-height: 1.35em; overflow-wrap: anywhere; }
 .board-wait { flex: 1; display: grid; align-content: center; gap: 8px; text-align: center; }
 .board-waiting { font-size: clamp(24px, 5vw, 64px); font-weight: bold; margin: 0; }
 .board-acts { display: flex; justify-content: flex-end; gap: 8px; }
 .board-acts .btn { min-width: 120px; }
+/* Long names and an upright screen (review 19/10/2026, change 21). On a landscape screen a name over 28 characters is 0.75 of
+   the size, so two lines hold about 50 characters; its box keeps the usual height, so both scores stay level. An upright screen
+   (a phone held up) has the two teams one above the other, each the full width, and the score at min(30vw, 17vh). */
+@media (orientation: landscape) { .board-name.long { font-size: calc(var(--nm) * 0.75); } }
+@media (orientation: portrait) {
+  .board-teams { grid-template-columns: minmax(0, 1fr); }
+  .board-score { font-size: min(30vw, 17vh); }
+}
 
 /* The scoresheet is wide, so on a big screen it may use more than the usual column. */
 #app[data-screen="sheet"] { max-width: 1700px; }

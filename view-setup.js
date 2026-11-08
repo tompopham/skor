@@ -7,12 +7,15 @@
 // with Rules and Details beside it and a one-line summary under it, then the two team cards with no labels (the seat
 // number in a gutter), then Match details (shown only when opened), and Start in a bar held at the bottom. Rules opens the
 // Rules screen (view-rules.js; review change 13, Tom's decision 7), which edits the draft's rules and comes back here.
+// Version 1.9.0 (review change 19; SPEC-v2 11, Tom's decisions 16 and 17): no Captain buttons (a saved match still carries
+// captain: null), Enter in a name box moves to the next one and never starts the match, switching format after the rules were
+// edited asks first, and two names that look alike get one short line under seat 4 and a heavier border.
 
 import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset, presetUnverified } from './presets.js';
 import { newMatch } from './engine.js';
 import { loadRoster, saveRoster } from './storage.js';
 import { h, newId } from './dom.js';
-import { renderRulesScreen } from './view-rules.js';
+import { renderRulesScreen, rulesDiffer } from './view-rules.js';
 
 // ---- Small helpers -------------------------------------------------------------------------
 
@@ -25,7 +28,7 @@ function freshDraft() {
   return {
     presetId: DEFAULT_PRESET_ID,
     rules: rulesFromPreset(DEFAULT_PRESET_ID),
-    teams: [0, 1].map(() => ({ name: '', seats: ['', '', '', ''], bench: ['', ''], captain: null })),
+    teams: [0, 1].map(() => ({ name: '', seats: ['', '', '', ''], bench: ['', ''] })),
     details: { competition: '', venue: '', round: '', reader: '', scorer: '' },
     open: { details: false, bench: [false, false] },
   };
@@ -61,6 +64,38 @@ export function nearDuplicateSeats(seats) {
   }
   return pairs;
 }
+
+// The warning under seat 4 (review change 19): "Seats 1 and 2 look alike", or '' when no names do. Seats that look alike in a
+// chain are one group ("Seats 1, 2 and 3 look alike"); a second group follows ("Seats 1 and 2 look alike; so do 3 and 4").
+export function alikeWarning(seats) {
+  const groups = [];
+  for (const [i, j] of nearDuplicateSeats(seats)) {
+    const joined = groups.filter(group => group.has(i) || group.has(j));
+    const merged = new Set([i, j, ...joined.flatMap(group => [...group])]);
+    groups.splice(0, groups.length, ...groups.filter(group => !joined.includes(group)), merged);
+  }
+  const words = groups.map(group => [...group].sort((a, b) => a - b).map(seat => seat + 1))
+    .sort((a, b) => a[0] - b[0])
+    .map(list => (list.length === 2 ? `${list[0]} and ${list[1]}` : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`));
+  if (words.length === 0) return '';
+  return `Seats ${words[0]} look alike${words.slice(1).map(w => `; so do ${w}`).join('')}`;
+}
+
+// The name boxes in the order Enter walks them (review change 19, Tom's decision 17): each team's name, its four seats, then its
+// bench boxes while they are open. The box after `id`, or null after the last one (and for any other box), so Enter can never
+// reach Start.
+function nameBoxes(draft) {
+  return [0, 1].flatMap(t => [`team${t}-name`, ...[0, 1, 2, 3].map(seat => `team${t}-seat${seat}`),
+    ...(draft.open?.bench?.[t] ? (draft.teams[t].bench ?? []).map((_, place) => `team${t}-bench${place}`) : [])]);
+}
+export function nextBox(draft, id) {
+  const boxes = nameBoxes(draft);
+  const at = boxes.indexOf(id);
+  return at < 0 || at === boxes.length - 1 ? null : boxes[at + 1];
+}
+
+// Whether picking another format must ask first (review change 19): the draft's rules differ, by value, from its format's.
+export const formatSwitchAsks = draft => rulesDiffer(draft.rules, rulesFromPreset(draft.presetId));
 
 // ---- The screen ----------------------------------------------------------------------------
 
@@ -121,15 +156,17 @@ function formatSelect(draft, onPick) {
 }
 
 // A team card (review change 3): no labels over the boxes. Row 0 is the team name, in bold, and the Bench button; rows 1 to 4
-// are the seats, each with its number in a narrow gutter (it stays in view after a name is typed) and Captain. The Bench
-// button shows how many bench names are typed, and opens the bench boxes under the seats.
-function teamCard(draft, t, rosterId) {
+// are the seats, each with its number in a narrow gutter (it stays in view after a name is typed). The Bench button shows how
+// many bench names are typed, and opens the bench boxes under the seats. `changed` is told when the boxes Enter walks change.
+function teamCard(draft, t, rosterId, changed) {
   const team = draft.teams[t];
   const side = t === 0 ? 'Left' : 'Right';
-  const warning = h('p', { class: 'msg' });
+  const warning = h('p', { class: 'msg', id: `team${t}-alike` });
+  const seatBoxes = [];
   const showWarning = () => {
-    warning.replaceChildren(...nearDuplicateSeats(team.seats).map(([i, j]) =>
-      h('span', {}, `Seats ${i + 1} and ${j + 1} are nearly the same name ("${team.seats[i].trim()}" and "${team.seats[j].trim()}"). Check they are two different players.`, h('br'))));
+    warning.textContent = alikeWarning(team.seats);
+    const alike = new Set(nearDuplicateSeats(team.seats).flat());
+    seatBoxes.forEach((box, seat) => box.classList.toggle('alike', alike.has(seat)));
   };
   const gutter = text => h('span', { class: 'gut', 'aria-hidden': 'true' }, text);
 
@@ -147,8 +184,6 @@ function teamCard(draft, t, rosterId) {
   const showBenchCount = () => { benchButton.textContent = `Bench (${benchCount()})`; };
   showBenchCount();
 
-  const captains = [];
-  const markCaptain = () => captains.forEach((button, seat) => button.setAttribute('aria-pressed', String(team.captain === seat)));
   const seatRows = [0, 1, 2, 3].map(seat => {
     const input = h('input', {
       id: `team${t}-seat${seat}`, list: rosterId, maxlength: 40, autocomplete: 'off', autocapitalize: 'words', autocorrect: 'off', spellcheck: 'false',
@@ -157,15 +192,12 @@ function teamCard(draft, t, rosterId) {
     });
     input.value = team.seats[seat];
     input.addEventListener('input', () => { team.seats[seat] = input.value; showWarning(); });
-    const captain = h('button', { type: 'button', class: 'btn small', 'aria-pressed': 'false', 'aria-label': `${side} team, seat ${seat + 1} is the captain` }, 'Captain');
-    captain.addEventListener('click', () => { team.captain = team.captain === seat ? null : seat; markCaptain(); });
-    captains.push(captain);
-    return h('div', { class: 'trow' }, gutter(String(seat + 1)), input, captain);
+    seatBoxes.push(input);
+    return h('div', { class: 'trow' }, gutter(String(seat + 1)), input);
   });
-  markCaptain();
   showWarning();
 
-  // The bench: a box for each name in the draft, and a button that adds another. A box is for a name only (no captain).
+  // The bench: a box for each name in the draft, and a button that adds another.
   const benchBox = place => {
     const input = h('input', {
       id: `team${t}-bench${place}`, list: rosterId, maxlength: 40, autocomplete: 'off', autocapitalize: 'words', autocorrect: 'off', spellcheck: 'false',
@@ -182,17 +214,19 @@ function teamCard(draft, t, rosterId) {
     team.bench.push('');
     const box = benchBox(team.bench.length - 1);
     addBench.before(box);
+    changed();
     box.querySelector('input').focus();
   });
   benchButton.addEventListener('click', () => {
     draft.open.bench[t] = !draft.open.bench[t];
     benchBlock.hidden = !draft.open.bench[t];
     benchButton.setAttribute('aria-expanded', String(draft.open.bench[t]));
+    changed();
     if (draft.open.bench[t]) benchBlock.querySelector('input')?.focus();
   });
 
   return h('div', { class: 'card tcard' }, h('h2', {}, `${side} team`),
-    h('div', { class: 'trow' }, gutter(''), name, benchButton), seatRows, benchBlock, warning);
+    h('div', { class: 'trow' }, gutter(''), name, benchButton), seatRows, warning, benchBlock);
 }
 
 // A section after the teams that shows only when its button in the top bar has opened it (Rules, Match details). The
@@ -221,8 +255,8 @@ const detailsContent = draft => h('div', { class: 'inner' }, h('div', { class: '
 
 // What Start makes of the draft: blank team names become Team A and Team B, and a team with no
 // names typed gets seats A1 to A4 (B1 to B4), as the bare-bones page did. The bench is the names typed in its
-// boxes, trimmed, with the empty boxes left out.
-function teamsFromDraft(draft) {
+// boxes, trimmed, with the empty boxes left out. No captain is asked for since 1.9.0, so none is recorded.
+export function teamsFromDraft(draft) {
   return draft.teams.map((team, t) => {
     const seats = team.seats.map(name => name.trim());
     const typed = seats.some(Boolean);
@@ -230,7 +264,7 @@ function teamsFromDraft(draft) {
       name: team.name.trim() || `Team ${SIDE[t]}`,
       seats: typed ? seats : [1, 2, 3, 4].map(n => `${SIDE[t]}${n}`),
       bench: (team.bench ?? []).map(name => name.trim()).filter(Boolean),
-      captain: typed && team.captain !== null && seats[team.captain] ? team.captain : null,
+      captain: null,
     };
   });
 }
@@ -246,8 +280,16 @@ export function renderSetup(root, state, api) {
   // The summary line says what the rules play like, as they now are.
   const summary = h('p', { class: 'hint', id: 'format-summary' }, rulesSummary(draft.rules));
 
-  // Picking another format replaces the rules, and nothing else: names and details stay.
-  const format = formatSelect(draft, id => {
+  // Picking another format replaces the rules, and nothing else: names and details stay. Rules that were edited are asked about
+  // first; Cancel puts the dropdown back. Once switched, the rules are the format's again, so the next arrow-key step does not ask.
+  const format = formatSelect(draft, async id => {
+    if (formatSwitchAsks(draft)) {
+      const choice = await api.ask({
+        title: 'Switch format?', body: 'Switching format replaces the rules you changed.',
+        buttons: [{ label: 'Switch format', value: 'switch', primary: true }, { label: 'Cancel', value: 'cancel' }],
+      });
+      if (choice !== 'switch') { format.value = draft.presetId; return; }
+    }
     draft.presetId = id;
     draft.rules = rulesFromPreset(id);
     summary.textContent = rulesSummary(draft.rules);
@@ -276,16 +318,32 @@ export function renderSetup(root, state, api) {
   }
 
   const start = h('button', { type: 'button', class: 'btn primary', id: 'start-match', onclick: startFromDraft }, 'Start match');
+  // The phone keyboard's Enter key says Next in every name box but the last, where it says Done.
+  const keyLabels = () => form.querySelectorAll('.tcard input').forEach(box => box.setAttribute('enterkeyhint', nextBox(draft, box.id) === null ? 'done' : 'next'));
   const form = h('form', { novalidate: true, autocomplete: 'off' },
     summary,
-    h('div', { class: 'grid2 tcards' }, teamCard(draft, 0, rosterId), teamCard(draft, 1, rosterId)),
+    h('div', { class: 'grid2 tcards' }, teamCard(draft, 0, rosterId, () => keyLabels()), teamCard(draft, 1, rosterId, () => keyLabels())),
     detailsSection,
     h('div', { class: 'startbar' }, start),
     h('p', { class: 'hint', id: 'setup-hint' }, 'Names are saved on this device for next time. A team with no names gets seats A1 to A4 (B1 to B4).'));
 
   // Only the Start button starts a match. The form never submits, so Enter or a phone keyboard's
-  // Go key in a name or a rule box does nothing, and a half-typed form cannot start by accident.
+  // Go key in a rule or details box does nothing, and a half-typed form cannot start by accident. In a name box Enter moves to
+  // the next name box (review change 19, Tom's decision 17); in the last it only closes a phone's keyboard. A key that finishes
+  // an accent or a character being composed is left alone.
   form.addEventListener('submit', event => event.preventDefault());
+  form.addEventListener('keydown', event => {
+    const box = event.target;
+    // keyCode 229: Safari ends the composition before the Enter that picks a Japanese or Chinese candidate, so isComposing is false.
+    if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229 || !(box instanceof HTMLInputElement) || !box.closest('.tcard')) return;
+    event.preventDefault();
+    const next = nextBox(draft, box.id);
+    if (next) document.getElementById(next)?.focus();
+    else box.blur();
+  });
+  keyLabels();
+  // With a mouse, the first name box is ready for typing when New match opens (app.js focuses it in place of the heading).
+  if (globalThis.matchMedia?.('(hover: hover) and (pointer: fine)').matches) form.querySelector('#team0-name')?.setAttribute('data-autofocus', '');
 
   const back = h('button', { type: 'button', class: 'btn small', onclick: () => api.go('home') }, 'Home');
   root.append(

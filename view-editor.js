@@ -32,6 +32,17 @@ const CSS = `
 .edhead .top .acts .btn { min-width: 80px; }
 #ed-strip { height: 38px; margin: 0 0 6px; font-size: 14px; line-height: 19px; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 #ed-strip.hint { color: var(--fg); }
+/* A dropdown or number box is 44 px on a touch screen, as on New match and Rules (found checking change 20 on a phone). */
+@media (pointer: coarse) { .editor select:not(.pstatus), .editor input:not([type="checkbox"]):not([type="radio"]) { min-height: 44px; } }   /* a protest's status keeps its 48 */
+/* A big window (review 19/10/2026, change 20): the Starter card on the left, the Bonus and the rest on the right, so a fix to both
+   needs no scrolling between them; only from 900 x 700, as at 756 x 470 two columns do not fit University Challenge. Smaller, the
+   two columns are not boxes at all, and the cards stack in the same order as before. */
+.edcol { display: contents; }
+@media (min-width: 900px) and (min-height: 700px) {
+  .editor { max-width: none; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .editor > p { grid-column: 1 / -1; }
+  .editor > .edcol { display: grid; gap: 10px; align-content: start; min-width: 0; }
+}
 `;
 
 // ---- Cycle editor (spec 6.4) -----------------------------------------------------------------
@@ -74,6 +85,14 @@ export function stripText(match, index, preview) {
   const scores = leftRight(match).map(team => `${shortName(teamName(match, team))} ${fmt(preview.d.scores[team])}`).join(', ');
   const flagged = preview.d.cycles.slice(index).filter(dc => dc.flags.length > 0).map(dc => `Q${dc.number}`);
   return { error: false, text: `After: ${scores}${flagged.length > 0 ? ` \u00b7 ${flagged.join(', ')} flagged` : ''}` };
+}
+
+// The line under Dead (review change 20): only while Dead is ticked, as { error, text }; red when the question also has buzzes.
+export function deadHelp(draft) {
+  if (!draft.dead) return null;
+  return draft.buzzes.length > 0
+    ? { error: true, text: 'This question has buzzes and is marked dead. Time called closes a question this way. Untick Dead before you give it a correct answer.' }
+    : { error: false, text: 'Time called closes an open question as dead. To give such a question a correct answer, untick Dead first.' };
 }
 
 // Whether the draft differs from the saved cycle in anything the editor itself changes. Protests and thrown-out questions
@@ -237,10 +256,8 @@ export function renderCycleEditor(root, state, api) {
     redraw();
   }))));
   starter.push(check('Dead: nobody got it', draft.dead, on => { draft.dead = on; redraw(); }, { id: 'ed-dead' }));
-  starter.push(h('p', { class: draft.dead && draft.buzzes.length > 0 ? 'msg' : 'hint', id: 'ed-dead-help' },
-    draft.dead && draft.buzzes.length > 0
-      ? 'This question has buzzes and is marked dead. Time called closes a question this way. Untick Dead before you give it a correct answer.'
-      : 'Time called closes an open question as dead. To give such a question a correct answer, untick Dead first.'));
+  const help = deadHelp(draft);
+  if (help) starter.push(h('p', { class: help.error ? 'msg' : 'hint', id: 'ed-dead-help' }, help.text));
   starter.push(check('No bonus after this starter', draft.noBonus, on => { draft.noBonus = on; redraw(); }));
   if (rules.atTime !== 'finishCycle') {
     starter.push(check('A buzz in at time called may still answer', draft.allowAfterTime === true, on => { draft.allowAfterTime = on ? true : null; redraw(); }));
@@ -384,12 +401,13 @@ export function renderCycleEditor(root, state, api) {
     h('div', { class: 'editor' },
       current.flags.length > 0 ? h('p', { class: 'msg', id: 'ed-flags' }, `Q${current.number}: ${current.flags.map(flagText).join('; ')}.`) : null,
       state.ui.msg ? h('p', { class: 'msg' }, state.ui.msg) : null,
-      h('div', { class: 'card' }, starter),
-      bonusCard.length > 0 ? h('div', { class: 'card' }, bonusCard) : null,
-      h('div', { class: 'card' }, field('Note', note)),
-      ...cards.nodes,
-      preview,
-      h('div', { class: 'row' },
-        h('button', { type: 'button', class: 'btn', id: 'ed-insert', onclick: onInsert }, `Insert before Q${number}`),
-        h('button', { type: 'button', class: 'btn', id: 'ed-delete', onclick: onDelete }, 'Delete this question'))));
+      h('div', { class: 'edcol', id: 'ed-left' }, h('div', { class: 'card', id: 'ed-starter' }, starter)),
+      h('div', { class: 'edcol', id: 'ed-right' },
+        bonusCard.length > 0 ? h('div', { class: 'card', id: 'ed-bonus' }, bonusCard) : null,
+        h('div', { class: 'card' }, field('Note', note)),
+        ...cards.nodes,
+        preview,
+        h('div', { class: 'row' },
+          h('button', { type: 'button', class: 'btn', id: 'ed-insert', onclick: onInsert }, `Insert before Q${number}`),
+          h('button', { type: 'button', class: 'btn', id: 'ed-delete', onclick: onDelete }, 'Delete this question')))));
 }

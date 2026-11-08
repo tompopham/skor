@@ -4,7 +4,9 @@
 //
 // It only listens. Asking and answering go over a BroadcastChannel named 'skor': the board says
 // { kind: 'hello' } when it opens, and the scorer answers, and then says it again after every change, with
-// { kind: 'state', match } (app.js). If no answer comes within 2 s the board says "Waiting for the scorer".
+// { kind: 'state', match } (app.js). If no answer comes within 2 s the board says "Waiting for the scorer". When the scorer's
+// page closes or reloads it says { kind: 'gone' } (version 1.9.0, review 19/10/2026 change 21), and the board says these are the
+// last scores until it hears from a scorer again.
 // The board never saves or changes anything; the one thing it reads from the device is the "hide player
 // names" setting, which the scorer's menu sets.
 
@@ -54,6 +56,17 @@ function lastEventText(match, d, hideNames) {
   return `Q${actor.number}: ${teamName(match, actor.team)}, ${text.slice(named.length)}`;
 }
 
+// A name over 28 characters is shown smaller on a landscape screen (review change 21), so two lines hold about 50 of them.
+export const longName = name => Array.from(String(name).trim()).length > 28;
+
+// The last-event row once the scorer's page has closed: the scores stay, said to be the last ones, with the question they stand at.
+export function goneLine(match, d) {
+  const open = d.open.cycleId ? d.cycles.find(cycle => cycle.id === d.open.cycleId) : null;
+  const closed = d.cycles.filter(cycle => cycle.closed).at(-1);
+  const at = open ? `, during Q${open.number}` : closed ? `, after Q${closed.number}` : '';
+  return `The scorer's page closed or reloaded. These are the last scores${at}.`;
+}
+
 // Everything the board shows, as text, from a match record. `teams` is in display order (left, then right).
 export function boardModel(match, hideNames = false) {
   const d = derive(match);
@@ -80,8 +93,9 @@ export function boardModel(match, hideNames = false) {
   return {
     question,
     phase: bits.join(' · '),
-    teams: leftRight(match).map(team => ({ team, name: teamName(match, team), score: fmt(d.scores[team]) })),
+    teams: leftRight(match).map(team => ({ team, name: teamName(match, team), score: fmt(d.scores[team]), long: longName(teamName(match, team)) })),
     last: lastEventText(match, d, hideNames),
+    gone: goneLine(match, d),
   };
 }
 
@@ -90,7 +104,8 @@ export function boardModel(match, hideNames = false) {
 // What the board holds between redraws. `match` is the last state heard (null until the first) and `model` what
 // was last made of it (the last good one: a record this page cannot read leaves the board as it was), `waiting`
 // turns true when 2 s pass with nothing heard, `view` is the page's current elements.
-const board = { channel: null, match: null, model: null, waiting: false, timer: null, view: null, onStorage: null, onFullscreen: null };
+// `gone`: the scorer's page has said it closed, and nothing has been heard since.
+const board = { channel: null, match: null, model: null, waiting: false, gone: false, timer: null, view: null, onStorage: null, onFullscreen: null };
 
 const hideNamesNow = () => loadSettings().hideNames === true;
 
@@ -111,9 +126,10 @@ function paint() {
     model.teams.forEach((team, side) => {
       view.names[side].textContent = team.name;
       view.names[side].title = team.name;
+      view.names[side].classList.toggle('long', team.long);
       view.scores[side].textContent = team.score;
     });
-    view.last.textContent = model.last;
+    view.last.textContent = board.gone ? model.gone : model.last;
   }
   view.main.hidden = !model;
   view.wait.hidden = model !== null || !board.waiting;
@@ -121,8 +137,14 @@ function paint() {
 
 function onMessage(event) {
   const message = event.data;
+  if (message?.kind === 'gone') {
+    const shown = board.match;
+    if (board.model && shown?.id === message.id && !(shown.rev > message.rev)) { board.gone = true; paint(); }
+    return;
+  }
   if (message?.kind !== 'state' || !looksLikeMatch(message.match)) return;
   board.match = message.match;
+  board.gone = false;
   board.waiting = false;
   clearTimeout(board.timer);
   paint();
@@ -132,6 +154,7 @@ function start() {
   board.match = null;
   board.model = null;
   board.waiting = false;
+  board.gone = false;
   try {
     board.channel = new BroadcastChannel(CHANNEL_NAME);
     board.channel.onmessage = onMessage;
@@ -175,9 +198,14 @@ export function renderBoard(root, state, api) {
     h('p', { class: 'board-waiting' }, 'Waiting for the scorer'),
     h('p', { class: 'hint' }, 'Start or resume a match in the scorer, in another tab or window of this browser. The board follows it.'));
 
+  // In fullscreen (a projector) the two buttons are hidden, and Esc, which the browser names as it goes full, brings them back
+  // (review change 21; Tom's decision 15).
   const fullscreen = h('button', { type: 'button', class: 'btn', id: 'board-fullscreen', onclick: toggleFullscreen }, 'Fullscreen');
-  const syncFullscreen = () => { fullscreen.textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen'; };
-  const acts = h('div', { class: 'board-acts' },
+  const syncFullscreen = () => {
+    fullscreen.textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen';
+    acts.hidden = Boolean(document.fullscreenElement);
+  };
+  const acts = h('div', { class: 'board-acts', id: 'board-acts' },
     document.fullscreenEnabled ? fullscreen : null,
     h('button', { type: 'button', class: 'btn', id: 'board-back', onclick: () => api.back() }, 'Back'));
 

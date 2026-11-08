@@ -75,7 +75,8 @@ function show(screen, ui = {}) {
   state.ui = { ...Object.fromEntries(KEEP_UI.filter(key => state.ui[key]).map(key => [key, state.ui[key]])), ...ui };
   render();
   window.scrollTo(0, 0);
-  document.querySelector('#app h1')?.focus({ preventScroll: true });
+  // The heading, or a box the screen marks to type in at once (New match's first name box, with a mouse: review change 19).
+  (document.querySelector('#app [data-autofocus]') ?? document.querySelector('#app h1'))?.focus({ preventScroll: true });
 }
 
 // The Back button on a screen: the screen before this one in the trail (Home if there is none), as the
@@ -229,6 +230,20 @@ const boardFollows = () => state.match !== null && !state.peek && (!state.viewOn
 function broadcast() {
   if (boardFollows()) sendToBoard(state.match);
 }
+
+// The page is closing or reloading: a board following this tab's match is told, so it shows the scores as the last ones rather
+// than as live (review 19/10/2026, change 21). Going Home is not closing: the match is still in progress there.
+// The message names the match and its version, so a board showing a newer version (a second tab that fell behind and then
+// closed) ignores it. A page brought back from the browser's back-forward cache tells the board again at once.
+window.addEventListener('pagehide', () => {
+  if (!state.match || state.viewOnly || state.peek) return;
+  try {
+    channel?.postMessage({ kind: 'gone', id: state.match.id, rev: state.match.rev });
+  } catch {
+    // The board keeps the last scores without the note.
+  }
+});
+window.addEventListener('pageshow', event => { if (event.persisted) broadcast(); });
 
 // A board has opened. A tab scoring the match in progress answers with it. A tab only looking at an old
 // match still knows which match is in progress, and answers with its saved copy. A tab with no match open
@@ -615,20 +630,35 @@ function leaveBoardAddress() {
 // else the button whose value is 'cancel', so Enter cannot confirm something destructive by accident.
 // `head`: the title sits in a header that stays at the top as the card scrolls, with Close (value 'cancel') at its right
 // and, given `back` ({ label, value }), a button at its left. `menu`: the card is the menu's, wider and fixed to the top
-// of the screen, and a press that starts and ends on the dimmed area round it closes it (a drag onto the card does not).
+// of the screen. `row`: that many of the first buttons share one row (Which team?, left team on the left; Which part?).
+// `first`: the buttons go above the body, not under it (the protest form: an iPhone's keyboard covers the bottom of the card, and
+// a tap just outside it must not land on Cancel; review 19/10/2026, change 17 part 5, Tom's iPhone check of 8 Nov 2026).
+// A press that starts and ends on the dimmed area round a dialog closes it as Cancel would (a drag onto the card does not),
+// unless the dialog has a box to type in or tick, or a score line to select (review 19/10/2026, change 17): the protest form,
+// a name or a number, the Split ticks and halftime keep what is in them.
 // A tap in the first 350 ms after a dialog opens is ignored (review 19/10/2026, change 2): the second tap of a quick
 // double tap on the button that opened it would otherwise land on whatever button is under the finger. Only a pointer's
 // click counts (event.detail > 0), so Enter and Space, and a click made by the page itself, are never held back.
 const FIELDS = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled):not([hidden])';   // a hidden box (Send match's link) takes no focus
 const DIALOG_GUARD_MS = 350;
 const openAsks = [];   // the dialogs showing, newest last: each is the function that closes it with a value
-function ask({ title, body = [], buttons = [], head = false, back = null, menu = false }) {
+
+// While a dialog is open the page behind it cannot scroll, by wheel, swipe or a scroll that runs past the end of the card, so it
+// is never left moved (review 19/10/2026, change 17: index.html's overscroll-behavior covers only a card that scrolls itself).
+// A page that had a scroll bar keeps its room, so nothing behind the dimmed area moves sideways either.
+function holdPage(on) {
+  const root = document.documentElement;
+  root.style.scrollbarGutter = on && root.scrollHeight > root.clientHeight ? 'stable' : '';
+  root.style.overflow = on ? 'hidden' : '';
+}
+function ask({ title, body = [], buttons = [], head = false, back = null, menu = false, row = 0, first = false }) {
   return new Promise(resolve => {
     const specs = buttons.map(button => (typeof button === 'string' ? { label: button, value: button } : button));
     const openedAt = performance.now();
     const finish = (value, popped = false) => {
       document.removeEventListener('keydown', onKey, true);
       openAsks.splice(openAsks.indexOf(finish), 1);
+      if (openAsks.length === 0) holdPage(false);
       dialog.remove();
       settleLayer(popped);
       resolve(value);
@@ -644,9 +674,10 @@ function ask({ title, body = [], buttons = [], head = false, back = null, menu =
     const top = head
       ? h('div', { class: 'dhead' }, back ? button(back, 'dback') : null, h('b', {}, title), button({ label: 'Close', value: 'cancel' }, 'dclose'))
       : h('b', {}, title);
+    const laid = row > 1 ? [h('div', { class: 'rowof' }, choices.slice(0, row)), ...choices.slice(row)] : choices;
     const card = head
-      ? h('div', { class: menu ? 'card mcard' : 'card hcard' }, top, h('div', { class: 'dbody' }, content, choices.length > 0 ? h('div', { class: 'stack' }, choices) : null))
-      : h('div', { class: 'card' }, top, content, h('div', { class: 'stack' }, choices));
+      ? h('div', { class: menu ? 'card mcard' : 'card hcard' }, top, h('div', { class: 'dbody' }, content, choices.length > 0 ? h('div', { class: 'stack' }, laid) : null))
+      : h('div', { class: 'card' }, top, first ? h('div', { class: 'stack' }, laid) : null, content, first ? null : h('div', { class: 'stack' }, laid));
     const dialog = h('div', { class: menu ? 'dialog anchored' : 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, card);
     dialog.addEventListener('click', event => {
       if (event.detail > 0 && performance.now() - openedAt < DIALOG_GUARD_MS) {
@@ -654,7 +685,7 @@ function ask({ title, body = [], buttons = [], head = false, back = null, menu =
         event.stopImmediatePropagation();
       }
     }, true);
-    if (menu) {
+    if (menu || !card.querySelector('input, select, textarea, .scoreline')) {
       let fromBackdrop = false;
       let toBackdrop = false;
       dialog.addEventListener('pointerdown', event => { fromBackdrop = event.target === dialog; });
@@ -684,6 +715,7 @@ function ask({ title, body = [], buttons = [], head = false, back = null, menu =
       }
     }
     document.addEventListener('keydown', onKey, true);
+    if (openAsks.length === 0) holdPage(true);
     openAsks.push(finish);
     raiseLayer();
     document.body.append(dialog);

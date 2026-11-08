@@ -1,6 +1,7 @@
 // What the scoring screen shows over its page or below its buttons: the clock's slot in the top bar, the fixed layer at the
-// bottom of the screen (the banner at 0:00, the timeout box and the halftime box), the phase banners, and the score line to
-// read out. Moved out of view-score.js for version 1.6.0 (review 19/10/2026, changes 14, 15 and 22), which changed all three.
+// bottom of the screen (the banner at 0:00, the timeout box, the halftime box and, from 1.9.0, the screen-lock line), the phase
+// banners, and the score line to read out. Moved out of view-score.js for version 1.6.0 (review 19/10/2026, changes 14, 15 and
+// 22), which changed all three.
 // The clock's figures are what clock.js works out from the record at api.now(), and the one 1 s ticker only repaints their
 // text; it never redraws the screen.
 
@@ -120,6 +121,16 @@ export function closeHalftimeBox(matchId, cycleId) {
   if (cycleId) timeUi.closed.add(halftimeKey(matchId, cycleId));
 }
 
+// The screen-lock line (review 19/10/2026, changes 16 and 23; Tom's decision 13, A), or null, from the page's wakeStatus(): one
+// line in this layer, so it is always on screen and moves nothing. Refused once ('lost'), Keep awake asks again (so does every
+// scoring tap); refused twice, or a browser with no screen lock ('hint'), it says what to do, and Hide puts it away for the match.
+export function wakeBox(status, hidden) {
+  if (status === 'lost') return { id: 'wake-box', text: 'Screen may sleep', button: 'Keep awake', act: 'ask' };
+  if (status === 'hint' && !hidden) return { id: 'wake-box', text: 'Screen may sleep: set Auto-Lock to Never', button: 'Hide', act: 'hide' };
+  return null;
+}
+const wakeKey = matchId => `${matchId}|wake`;
+
 // The latest timeout's box, or null: its time left comes from the marker's own time. It stays at 0:00 until
 // closed if it was seen counting; one that ended before the page looked (a reload) is not brought back.
 function timeoutBox(match, now) {
@@ -157,6 +168,13 @@ function buildBox(box, state, api) {
 }
 
 function makeBox(box, state, api) {
+  if (box.id === 'wake-box') {
+    const act = h('button', {
+      type: 'button', class: 'btn', id: 'wake-act',
+      onclick: () => { if (box.act === 'ask') api.keepAwake(); else { timeUi.closed.add(wakeKey(state.match.id)); refreshClock(state, api); } },
+    }, box.button);
+    return h('div', { class: 'timebox wakebox', id: box.id, 'data-key': box.key, role: 'status' }, h('span', { class: 'timetext' }, box.text), act);
+  }
   const close = h('button', {
     type: 'button', class: 'btn', id: box.closeId,
     onclick: () => { timeUi.closed.add(box.key); refreshClock(state, api); },
@@ -214,7 +232,9 @@ export function refreshClock(state, api) {
     if (slot.textContent !== text) slot.textContent = text;
   }
   watchGong(match, countdownState(match, now));
-  syncTimeLayer(state, api, state.ui.sub ? [] : [timeoutBox(match, now), bannerBox(match, d, now), halftimeBox(match, d)].filter(Boolean));
+  const wake = wakeBox(api.wakeStatus(), timeUi.closed.has(wakeKey(match.id)));
+  const wanted = [timeoutBox(match, now), bannerBox(match, d, now), halftimeBox(match, d), wake && { ...wake, key: `${wakeKey(match.id)}|${wake.act}` }];
+  syncTimeLayer(state, api, state.ui.sub ? [] : wanted.filter(Boolean));
 }
 
 const ticker = { timer: null, live: null };
@@ -239,7 +259,8 @@ export function stopClockTicker() {
   document.getElementById('timelayer')?.remove();
 }
 
-// ---- Banners (phase announcements), below the action bar so nothing above them moves; halftime's is in the layer above ----
+// ---- Banners (phase announcements), below the action bar so nothing above them moves; halftime's and the screen lock's are in
+// the layer above ----
 
 function banner(title, lines, ...extras) {
   return h('div', { class: 'banner' }, h('b', {}, title), [lines].flat().map(text => h('p', {}, text)), ...extras);
@@ -277,13 +298,6 @@ export function banners(c, endMatch) {
       const quarters = match.markers.filter(m => m.type === 'quarter').length;
       out.push(banner(`Quarter ${quarters} ended`, 'Score check, to read out or copy:', ...copyLine(checkLine(match, d, last.id)), backupButton(api)));
     }
-  }
-
-  const awake = api.wakeStatus();
-  if (awake === 'lost') {
-    out.push(h('div', { class: 'banner' }, h('button', { type: 'button', class: 'btn', id: 'wake-ask', onclick: () => api.keepAwake() }, 'Tap to keep screen awake')));
-  } else if (awake === 'hint') {
-    out.push(banner('The screen may switch itself off', 'Set Auto-Lock to Never (iPhone: Settings, then Display & Brightness, then Auto-Lock) while you are scoring.'));
   }
   return h('div', { class: 'banners', id: 'banners' }, out);
 }
