@@ -23,15 +23,12 @@ import { renderCycleEditor } from './view-editor.js';
 import { renderRulesScreen } from './view-rules.js';
 import { protestFlow, throwOutFlow, boundsWords } from './view-protest.js';
 import { swapFlow } from './view-swap.js';
+import { scoreHead, winMenuLine } from './view-win.js';
 import { menuModel, showMenu } from './view-menu.js';
 import { legend, recentList } from './view-side.js';
 import {
   copyLine, backupButton, checkLine, clockSlot, clockRulesOf, refreshClock, startClockTicker, closeHalftimeBox, banners,
 } from './view-banners.js';
-
-// ---- Words and numbers -----------------------------------------------------------------------
-
-const hasEntry = cycle => cycle !== null && cycle !== undefined && (cycle.buzzes.length > 0 || cycle.lostTurn.length > 0 || cycle.streak.length > 0);
 
 // ---- The tap guard and the keys --------------------------------------------------------------
 // One clock for both: performance.now(). A tap is ignored for 350 ms after the screen changes stage
@@ -195,6 +192,8 @@ function topBar(c) {
 
 // ---- Format picker and starter types ---------------------------------------------------------
 
+const hasEntry = cycle => cycle !== null && cycle !== undefined && (cycle.buzzes.length > 0 || cycle.lostTurn.length > 0 || cycle.streak.length > 0);
+
 // Under trivia rules the Format box, Next clue and End quarter are one row at the top on a phone, and head the right column
 // on a wider window (review 19/10/2026, change 11): the Format box's closed text names it ("Format: Normal").
 function picker(c) {
@@ -271,7 +270,7 @@ function teamsView(c) {
   const seats = match.display?.seatOrder === 'desc' ? [3, 2, 1, 0] : [0, 1, 2, 3];
   return h('div', { class: 'teams' }, leftRight(match).map((team, column) => h('div', { class: 'team', 'data-team': team },
     h('div', { class: 'tname', title: teamName(match, team) }, h('span', { class: 'tn' }, teamName(match, team))),
-    h('div', { class: 'score', 'data-score': team }, fmt(d.scores[team])),
+    scoreHead(c, team),
     seats.map((seat, row) => {
       const info = seatInfo(c, team, seat);
       const on = ui.selected?.team === team && ui.selected?.seat === seat;
@@ -569,7 +568,7 @@ const CANCEL = { label: 'Cancel', value: 'cancel' };
 // there, in place, and the screen is drawn again once the menu closes.
 async function openMenu(c) {
   const { api } = c;
-  const options = () => ({ keysOn: keysAreOn(), namesHidden: loadSettings().hideNames === true, updateReady: api.updateReady() });
+  const options = () => ({ keysOn: keysAreOn(), namesHidden: loadSettings().hideNames === true, updateReady: api.updateReady(), winFile: winMenuLine() });
   let toggled = false;
   const onToggle = value => {
     toggled = true;

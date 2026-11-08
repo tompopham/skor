@@ -16,6 +16,7 @@ import { newMatch } from './engine.js';
 import { loadRoster, saveRoster } from './storage.js';
 import { h, newId } from './dom.js';
 import { renderRulesScreen, rulesDiffer } from './view-rules.js';
+import { ratingMarks } from './view-win.js';
 
 // ---- Small helpers -------------------------------------------------------------------------
 
@@ -169,6 +170,7 @@ function teamCard(draft, t, rosterId, changed) {
     seatBoxes.forEach((box, seat) => box.classList.toggle('alike', alike.has(seat)));
   };
   const gutter = text => h('span', { class: 'gut', 'aria-hidden': 'true' }, text);
+  const marks = ratingMarks();   // win % (1.10.0): "not rated" beside a name the ratings file does not know; nothing with no file
 
   const name = h('input', {
     id: `team${t}-name`, class: 'tbold', maxlength: 60, placeholder: `Team ${SIDE[t]}`, autocomplete: 'off', autocapitalize: 'words', spellcheck: 'false',
@@ -193,7 +195,7 @@ function teamCard(draft, t, rosterId, changed) {
     input.value = team.seats[seat];
     input.addEventListener('input', () => { team.seats[seat] = input.value; showWarning(); });
     seatBoxes.push(input);
-    return h('div', { class: 'trow' }, gutter(String(seat + 1)), input);
+    return h('div', { class: 'trow' }, gutter(String(seat + 1)), input, marks.mark(input));
   });
   showWarning();
 
@@ -205,7 +207,7 @@ function teamCard(draft, t, rosterId, changed) {
     });
     input.value = team.bench[place] ?? '';
     input.addEventListener('input', () => { team.bench[place] = input.value; showBenchCount(); });
-    return h('div', { class: 'trow bench' }, gutter(`B${place + 1}`), input);
+    return h('div', { class: 'trow bench' }, gutter(`B${place + 1}`), input, marks.mark(input));
   };
   const addBench = h('button', { type: 'button', class: 'btn', id: `team${t}-add-bench` }, 'Add a bench player');
   const benchBlock = h('div', { class: 'benchrows', id: `team${t}-benchrows` }, team.bench.map((_, place) => benchBox(place)), addBench);
@@ -226,7 +228,7 @@ function teamCard(draft, t, rosterId, changed) {
   });
 
   return h('div', { class: 'card tcard' }, h('h2', {}, `${side} team`),
-    h('div', { class: 'trow' }, gutter(''), name, benchButton), seatRows, warning, benchBlock);
+    h('div', { class: 'trow' }, gutter(''), name, benchButton), seatRows, warning, marks.line, benchBlock);
 }
 
 // A section after the teams that shows only when its button in the top bar has opened it (Rules, Match details). The

@@ -15,6 +15,7 @@ export const KEYS = {
   current: 'scorer.current',
   roster: 'scorer.roster',
   settings: 'scorer.settings',
+  ratings: 'scorer.ratings',      // win percentage's ratings file (SPEC-partB 0.3 and 2.1), as its text
 };
 const MATCH_PREFIX = 'scorer.match.';
 export const matchKey = id => `${MATCH_PREFIX}${id}`;
@@ -232,6 +233,19 @@ export function loadSettings(store = defaultStore()) {
 export function saveSettings(settings, store = defaultStore()) {
   return attempt(() => store.setItem(KEYS.settings, JSON.stringify(isObject(settings) ? settings : {})));
 }
+
+// The ratings file's text, or null (none saved, or the store cannot be read). winprob.js reads and checks it.
+export function loadRatingsText(store = defaultStore()) {
+  try {
+    const text = store.getItem(KEYS.ratings);
+    return typeof text === 'string' ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+export const saveRatingsText = (text, store = defaultStore()) => attempt(() => store.setItem(KEYS.ratings, String(text)));
+export const removeRatingsText = (store = defaultStore()) => attempt(() => store.removeItem(KEYS.ratings));
 
 // ---- Backup files ---------------------------------------------------------------------------
 

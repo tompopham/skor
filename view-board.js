@@ -7,14 +7,15 @@
 // { kind: 'state', match } (app.js). If no answer comes within 2 s the board says "Waiting for the scorer". When the scorer's
 // page closes or reloads it says { kind: 'gone' } (version 1.9.0, review 19/10/2026 change 21), and the board says these are the
 // last scores until it hears from a scorer again.
-// The board never saves or changes anything; the one thing it reads from the device is the "hide player
-// names" setting, which the scorer's menu sets.
+// The board never saves or changes anything; what it reads from the device is the "hide player names" setting, which
+// the scorer's menu sets, and from 1.10.0 Win %'s ratings file and its "Show on the room board" tick (view-win.js).
 
 import { derive } from './engine.js';
 import { loadSettings, KEYS } from './storage.js';
 import { h } from './dom.js';
 import { lineupAt, playerName } from './lineup.js';
 import { fmt, teamName, leftRight } from './view-common.js';
+import { boardWinText } from './view-win.js';
 
 export const CHANNEL_NAME = 'skor';
 const WAIT_MS = 2000;
@@ -131,6 +132,9 @@ function paint() {
     });
     view.last.textContent = board.gone ? model.gone : model.last;
   }
+  const win = boardWinText(board.match);   // win % (1.10.0): a line under the scores with the file and the board tick, else none
+  view.win.hidden = win === null;
+  view.win.textContent = win ?? '';
   view.main.hidden = !model;
   view.wait.hidden = model !== null || !board.waiting;
 }
@@ -166,8 +170,8 @@ function start() {
     board.waiting = true;
     paint();
   }, WAIT_MS);
-  // The scorer's menu changes "hide player names" in another tab; the board follows without a reload.
-  board.onStorage = event => { if (event.key === KEYS.settings || event.key === null) paint(); };
+  // The scorer's menu changes "hide player names", or Win %'s file or tick, in another tab; the board follows without a reload.
+  board.onStorage = event => { if (event.key === KEYS.settings || event.key === KEYS.ratings || event.key === null) paint(); };
   window.addEventListener('storage', board.onStorage);
 }
 
@@ -192,8 +196,9 @@ export function renderBoard(root, state, api) {
   const question = h('div', { class: 'board-q', id: 'board-question', 'aria-live': 'polite' });
   const phase = h('div', { class: 'board-phase', id: 'board-phase', 'aria-live': 'polite' });
   const last = h('div', { class: 'board-last', id: 'board-last', 'aria-live': 'polite' });
+  const win = h('div', { class: 'board-win', id: 'board-win', 'aria-live': 'polite', hidden: true });
   const teams = h('div', { class: 'board-teams' }, side(0), side(1));
-  const main = h('div', { class: 'board-main', id: 'board-main', hidden: true }, phase, teams, last);
+  const main = h('div', { class: 'board-main', id: 'board-main', hidden: true }, phase, teams, win, last);
   const wait = h('div', { class: 'board-wait', id: 'board-wait', hidden: true },
     h('p', { class: 'board-waiting' }, 'Waiting for the scorer'),
     h('p', { class: 'hint' }, 'Start or resume a match in the scorer, in another tab or window of this browser. The board follows it.'));
@@ -214,7 +219,7 @@ export function renderBoard(root, state, api) {
     h('div', { class: 'board-top' }, h('span', { class: 'unofficial', id: 'board-unofficial' }, 'Unofficial'), question),
     main, wait, acts));
 
-  board.view = { question, phase, last, main, wait, names: [...teams.querySelectorAll('.board-name')], scores: [...teams.querySelectorAll('.board-score')] };
+  board.view = { question, phase, last, win, main, wait, names: [...teams.querySelectorAll('.board-name')], scores: [...teams.querySelectorAll('.board-score')] };
   if (board.onFullscreen) document.removeEventListener('fullscreenchange', board.onFullscreen);
   board.onFullscreen = syncFullscreen;
   document.addEventListener('fullscreenchange', syncFullscreen);

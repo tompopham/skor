@@ -12,6 +12,7 @@ import { h, newId } from './dom.js';
 import { isLive, isIosSafariTab } from './view-common.js';
 import { isMatchLink, readLink } from './link.js';
 import { sendDialog, offerLink, showSent, askToSave } from './view-send.js';
+import { winDialog } from './view-win.js';
 import { renderSetup } from './view-setup.js';
 import { renderScore } from './view-score.js';
 import { stopClockTicker } from './view-banners.js';
@@ -50,6 +51,7 @@ const api = {
   go, back, dispatch, dispatchAll, startMatch, setUi, closeSub, ask, undo, redo, setDisplay, editCycle,
   keepAwake, wakeStatus, offerBackup, viewMatch, resumeSaved, deleteSaved, updateReady, applyUpdate, now, lookAt, askForPersistentStorage,
   sendMatch: () => sendDialog(state.match, api),
+  winDialog: () => winDialog(api, state.match),
 };
 
 // The time every action is stamped with, and every clock on screen is worked out from: milliseconds since

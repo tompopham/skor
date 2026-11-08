@@ -158,6 +158,22 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 .trow > input:last-child { grid-column: 2 / -1; }   /* a seat or bench box runs to the card's edge (Captain went in 1.9.0) */
 /* Two seats whose names look alike (review 19/10/2026, change 19): a 2 px border on both boxes, and one short line under seat 4. */
 .trow input.alike { border: 2px solid var(--fg); }
+/* Win % (1.10.0, SPEC-partB 2.3), drawn only with a ratings file loaded: "not rated" in the slot beside a name box on Setup;
+   beside each score a slot of fixed width, where the favourite's says "Win 62%", so nothing moves as it changes; a line
+   under the scores on the room board; and on the scoresheet the chances as a black line on white, which prints. */
+.trow > .unrated { align-self: center; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.scorerow { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; min-width: 0; }
+.scorerow > .win { flex: none; width: 8.5ch; text-align: right; font-size: 15px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+@media (max-width: 639px) { .main[data-stage="bonus"] .scorerow { grid-row: 4; margin-top: 4px; } .main[data-stage="bonus"] .scorerow .score { margin-top: 0; } }
+.board-win { font-size: clamp(18px, 3vw, 40px); font-weight: bold; text-align: center; min-height: 1.35em; overflow-wrap: anywhere; }
+.winsheet h2 { font-size: 16px; margin: 16px 0 4px; }
+.winchart { display: block; width: 100%; max-width: 640px; height: auto; }
+.winchart .wc-bg { fill: var(--bg); stroke: var(--line); }
+.winchart .wc-edge { stroke: var(--line); stroke-width: 1; }
+.winchart .wc-mid { stroke: var(--fg); stroke-width: 1; stroke-dasharray: 4 4; }
+.winchart .wc-line { fill: none; stroke: var(--fg); stroke-width: 2.5; stroke-linejoin: round; }
+.winchart .wc-text { fill: var(--fg); font: 12px Arial, Helvetica, sans-serif; }
+@media print { .winchart .wc-bg { fill: #fff; } .winchart .wc-line, .winchart .wc-mid { stroke: #000; } .winchart .wc-text { fill: #000; } .winsheet { break-inside: avoid; } }
 .tbold { font-weight: bold; }
 .benchrows { display: grid; gap: 4px; }
 .benchrows[hidden] { display: none; }

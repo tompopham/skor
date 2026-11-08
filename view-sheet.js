@@ -14,6 +14,7 @@ import { h } from './dom.js';
 import { ensureStyles, refusalText, isLive, fmt } from './view-common.js';
 import { protestControls } from './view-protest.js';
 import { keptTag } from './view-send.js';
+import { winChart } from './view-win.js';
 
 // ---- Style -----------------------------------------------------------------------------------
 // The tables come with the class names the saved file uses (.seat, .notes, .num ...). Two of them
@@ -312,7 +313,7 @@ export function renderSheet(root, state, api) {
   const heading = h('h2', { class: 'sheet-title' }, ...title.childNodes);
   const sheet = h('div', { class: 'sheet', id: 'sheet' }, heading, ...rest);
   openableRows(sheet, match, d, api);
-  sheet.querySelector('table.cycles')?.parentElement.after(questionList(match, d, api));
+  sheet.querySelector('table.cycles')?.parentElement.after(questionList(match, d, api), ...winChart(match, d));
   deletableSwaps(sheet, api);
   controlledProtests(sheet, state, api, d);
 

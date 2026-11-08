@@ -1,5 +1,6 @@
 // The scoring screen's menu in two levels (review 19/10/2026, change 2; Tom's decision 2). Menu holds the eleven
-// buttons used mid-match, in three groups; More holds the other ten (Send match, SPEC-partB 1.2, last, on a row of its own). Each panel has a fixed header with its title and
+// buttons used mid-match, in three groups; More holds the other eleven (Send match, SPEC-partB 1.2, last, on a row of its own;
+// Win %, SPEC-partB 2.3, under the keys, from 1.10.0). Each panel has a fixed header with its title and
 // Close (and, on More, a Menu button back). A greyed button keeps its label and says why on a second line, and a
 // Timeout names its team in full on its second line, so two long names never read the same. The two settings in More
 // switch in place and show their state, without closing the panel. menuModel() is pure, for the tests; showMenu()
@@ -11,9 +12,9 @@ import { teamName, leftRight } from './view-common.js';
 
 const group = (title, ...items) => ({ title, items });
 
-// What each panel holds. `opts`: { keysOn, namesHidden, updateReady }. An item is { value, label } plus, where it
+// What each panel holds. `opts`: { keysOn, namesHidden, updateReady, winFile } (winFile: the ratings file's line, or null). An item is { value, label } plus, where it
 // applies, `sub` (the second line), `disabled`, `full` (the whole row on a phone), and `toggle` with `pressed`.
-export function menuModel(match, d, { keysOn, namesHidden, updateReady }) {
+export function menuModel(match, d, { keysOn, namesHidden, updateReady, winFile = null }) {
   const { phase } = d;
   const timeDone = match.markers.some(m => m.type === 'timeCalled');
   const threeStarters = phase.overtime?.mode === 'threeStarters';
@@ -47,7 +48,8 @@ export function menuModel(match, d, { keysOn, namesHidden, updateReady }) {
     group('Screen and keys',
       { value: 'swap', label: 'Swap sides' },
       { value: 'reverse', label: 'Reverse seat order' },
-      { value: 'keys', label: 'Single-key shortcuts', full: true, toggle: true, pressed: keysOn, sub: keysOn ? 'on' : 'off' }),
+      { value: 'keys', label: 'Single-key shortcuts', full: true, toggle: true, pressed: keysOn, sub: keysOn ? 'on' : 'off' },
+      { value: 'win', label: 'Win %', full: true, sub: winFile ?? 'no ratings file' }),
     group('Room board',
       { value: 'board', label: 'Open room board', full: true },
       { value: 'boardnames', label: 'Player names on board', full: true, toggle: true, pressed: !namesHidden, sub: namesHidden ? 'hidden' : 'shown' }),
@@ -98,6 +100,7 @@ export async function showMenu(api, model, onToggle) {
       back: panel === 'more' ? { label: 'Menu', value: 'back' } : null,
       body: finish => [update, panelBody(groups, finish, toggled)],
     });
+    if (choice === 'win') { await api.winDialog(); return 'cancel'; }   // Win % (1.10.0): its own dialog, then the screen redraws
     if (choice === 'more') panel = 'more';
     else if (choice === 'back') panel = 'menu';
     else return choice;
