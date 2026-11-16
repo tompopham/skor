@@ -81,12 +81,13 @@ function pickFile(say, redraw) {
 // have, or offers the registered team's players when the boxes hold names typed by hand. `fill(seats, bench)` puts a
 // roster into the card; `boxes()` gives what the card's boxes hold now ({ seats, bench }). The draft remembers which
 // registered team filled the card (`fromTournament`), so typing on past a shorter name refills and never asks.
-export function teamPicker(now, draftTeam, fill, boxes) {
+// `size` is the card's name boxes: 4, or 10 in a buzzer session (1.12.0), where every player past the 10th is left out.
+export function teamPicker(now, draftTeam, fill, boxes, size = 4) {
   const line = h('p', { class: 'hint tline' });
   if (!now.tournament) return { line: null, onName() {}, listId: null };
   const offer = h('button', { type: 'button', class: 'btn small' });
   const show = (text, registered = null) => {
-    const count = registered ? rosterSeats(registered).seats.filter(Boolean).length + rosterSeats(registered).bench.length : 0;
+    const count = registered ? rosterSeats(registered, size).seats.filter(Boolean).length + (size === 4 ? rosterSeats(registered).bench.length : 0) : 0;
     line.replaceChildren(registered && count === 0 ? 'In the tournament file, with no players listed.' : text);
     if (registered && count > 0) {
       offer.textContent = `Use its ${count} player${count === 1 ? '' : 's'}`;
@@ -96,15 +97,15 @@ export function teamPicker(now, draftTeam, fill, boxes) {
   };
   // The card still holds exactly the roster the picker put in (`team`'s), not names typed since.
   const holdsRoster = team => {
-    const roster = rosterSeats(team);
+    const roster = rosterSeats(team, size);
     const now = boxes();
     const bench = now.bench.map(name => String(name ?? '').trim()).filter(Boolean);
-    return now.seats.every((name, i) => String(name ?? '').trim() === roster.seats[i]) && bench.join('\n') === roster.bench.join('\n');
+    return now.seats.every((name, i) => String(name ?? '').trim() === roster.seats[i]) && bench.join('\n') === (size === 4 ? roster.bench : []).join('\n');
   };
   const use = registered => {
-    const roster = rosterSeats(registered);
+    const roster = rosterSeats(registered, size);
     draftTeam.fromTournament = registered.name;
-    fill(roster.seats, roster.bench);
+    fill(roster.seats, size === 4 ? roster.bench : []);
     show('');
   };
   const onName = value => {
@@ -113,13 +114,13 @@ export function teamPicker(now, draftTeam, fill, boxes) {
       // Typing on past a registered name ("Oxford B" to "Oxford Brookes") takes out the roster it put in, so no one
       // else's players are left in the seats; names typed by hand stay.
       const filled = findTeam(now.tournament, draftTeam.fromTournament ?? '');
-      if (filled && filled.name === draftTeam.fromTournament && holdsRoster(filled)) fill(['', '', '', ''], []);
+      if (filled && filled.name === draftTeam.fromTournament && holdsRoster(filled)) fill(Array(size).fill(''), []);
       draftTeam.fromTournament = null;
       show(String(value ?? '').trim() ? NOT_IN_TOURNAMENT : '');
       return;
     }
     const previous = findTeam(now.tournament, draftTeam.fromTournament ?? '');
-    const plan = fillPlan(boxes(), registered, previous && previous.name === draftTeam.fromTournament ? previous : null);
+    const plan = fillPlan(boxes(), registered, previous && previous.name === draftTeam.fromTournament ? previous : null, size);
     if (plan === 'fill') use(registered);
     else if (plan === 'ask') show('In the tournament file.', registered);
     else show('');

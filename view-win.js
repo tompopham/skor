@@ -8,6 +8,7 @@ import { h } from './dom.js';
 import { derive } from './engine.js';
 import { loadSettings, saveSettings, loadRatingsText, saveRatingsText, removeRatingsText } from './storage.js';
 import { readRatings, lookUp, matchChance, chanceLine, favourite, unsupported } from './winprob.js';
+import { isSession } from './session.js';
 import { fmt, teamName, leftRight, check } from './view-common.js';
 
 // ---- The file and the ticks ----------------------------------------------------------------------
@@ -32,6 +33,7 @@ const ticks = () => {
 
 // The ratings, when the chance is to be shown for this match on `where` ('screen' or 'board'), else null.
 function shownFor(match, where) {
+  if (isSession(match)) return null;   // the ratings were fitted on 4-a-side games (spec 6.5)
   const ratings = ratingsNow();
   return ratings && ticks()[where] && !unsupported(match.rules) ? ratings : null;
 }

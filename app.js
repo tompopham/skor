@@ -3,6 +3,7 @@
 // (root, state, api). Nothing here is exported.
 
 import { applyAction, derive, RefusedError } from './engine.js';
+import { paddedSeats } from './session.js';
 import { createHistory, sameVersion } from './history.js';
 import {
   saveMatch, loadMatch, deleteMatch, setCurrent, getCurrent, parseBackup, mergeDecision, matchKey, detectForeignChange,
@@ -126,13 +127,13 @@ const isObject = value => value !== null && typeof value === 'object' && !Array.
 
 // The one place a match that came from outside (Resume, a backup file) is given the fields every
 // screen reads. A record from an older version may lack `display` or `details` (Task 8 carry), and
-// `rev` and `nextCycleNo` are read by the engine's next action.
+// `rev` and `nextCycleNo` are read by the engine's next action. A buzzer session keeps its 11 places (session.js).
 function withDefaults(match) {
   const cycleNumbers = match.cycles.map(cycle => Number(String(cycle.id).replace(/^c/, ''))).filter(Number.isInteger);
   match.details = { competition: '', venue: '', round: '', room: '', reader: '', scorer: '', ...(isObject(match.details) ? match.details : {}) };
   match.display = { leftTeam: 0, seatOrder: 'asc', ...(isObject(match.display) ? match.display : {}) };
   match.teams.forEach(team => {
-    team.seats = [0, 1, 2, 3].map(seat => team.seats?.[seat] ?? '');
+    team.seats = paddedSeats(match, team.seats);
     team.captain ??= null;
   });
   if (!Number.isInteger(match.rev)) match.rev = 0;

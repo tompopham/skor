@@ -6,6 +6,7 @@
 import { FORMATS } from './engine.js';
 import { lineupsOf, playerName } from './lineup.js';
 import { h } from './dom.js';
+import { isSession } from './session.js';
 import { fmt, teamName, leftRight, flagText } from './view-common.js';
 
 const RESULT_WORDS = { power: 'power', ten: '10', neg: 'neg', wrong: 'wrong' };
@@ -21,7 +22,7 @@ export function legendRows(match, d, { canUndo, canRedo, keysOn = true }) {
   const answering = starter && open.format !== 'streak';
   const bonus = keysOn && open.stage === 'bonus';
   const timeLive = keysOn && !phase.ended && !phase.regulationOver && !match.markers.some(m => m.type === 'timeCalled');
-  const rows = [['1–4, 5–8', 'Seats: left team, right team', answering]];
+  const rows = [isSession(match) ? ['1–9, 0, -; Shift', 'Places: left team; with Shift, right team', answering] : ['1–4, 5–8', 'Seats: left team, right team', answering]];
   if (rules.tossup.power != null) rows.push(['P', 'Power', answering]);
   rows.push(['C', 'Correct', answering]);
   if (!rules.trivia) rows.push(['N', 'Neg', answering]);

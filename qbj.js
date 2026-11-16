@@ -14,11 +14,16 @@
 import { derive } from './engine.js';
 import { lineupsOf, playerName, playersOf } from './lineup.js';
 import { leftRight, teamName } from './view-common.js';
+import { isSession } from './session.js';
 
 export const QBJ_TRIVIA = 'QBJ files cannot hold trivia formats';
 
 // Consensus and GradWrite (trivia rules) have jackpots, streaks and quarters a QBJ file has no field for.
-export const canSaveQbj = match => !match.rules?.trivia;
+// A buzzer session (1.12.0) has up to 10 players a team, which a QBJ file cannot hold: no file, and this line in the button's place.
+export const QBJ_SESSION = 'No QBJ file from a buzzer session: QBJ allows 4 players a team.';
+export const canSaveQbj = match => !match.rules?.trivia && !isSession(match);
+// The line that stands in the QBJ button's place when there is no file, or null when there is one.
+export const qbjReason = match => (canSaveQbj(match) ? null : isSession(match) ? QBJ_SESSION : QBJ_TRIVIA);
 
 // The round as YellowFruit and the site need it: a whole number from 1 to 999 (as the TD check page reads a round), typed
 // in Match details; otherwise none.
@@ -48,7 +53,7 @@ function lineupReason(match, d, team, index) {
 
 // The QB Schema Match for a buzzer-format match. `d` is derive(match), passed in when the caller has it.
 export function toQbj(match, d = derive(match)) {
-  if (!canSaveQbj(match)) throw new Error(QBJ_TRIVIA);
+  if (!canSaveQbj(match)) throw new Error(qbjReason(match));
   const { rules } = match;
   const order = leftRight(match);
   const lineups = lineupsOf(match);

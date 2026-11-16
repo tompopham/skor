@@ -6,6 +6,7 @@
 // emptied by a swap has a dead key, and a seat a late arrival has filled has a live one.
 
 import { lineupAt } from './lineup.js';
+import { isSession, screenPlaces } from './session.js';
 
 const STARTER_TYPES = ['normal', 'picture', 'music'];
 const RESULT_KEYS = { p: 'power', c: 'ten', n: 'neg', w: 'wrong' };
@@ -28,6 +29,20 @@ function seatOfKey(key, match) {
   const slot = Number(key) - 1;
   const team = slot < 4 ? leftTeam(match) : 1 - leftTeam(match);
   return { team, seat: match.display?.seatOrder === 'desc' ? 3 - (slot % 4) : slot % 4 };
+}
+
+// A session's keys (spec 6.5): 1 to 9, then 0, then - are the first, second ... eleventh place in screen order; Shift with the
+// same key picks the right team's. They are read by the key's position (`code`), not its character, because Shift+3 is the
+// character £ on a UK keyboard. A key past the last shown place, or the Menu's other keys, give null. A game never calls this.
+const SESSION_CODES = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9', 'Digit0', 'Minus'];
+export const sessionKeyLabels = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-'];
+export function sessionSeatOfKey(ev, match) {
+  const code = typeof ev.code === 'string' && ev.code !== '' ? ev.code : (!ev.shiftKey && /^[0-9-]$/.test(ev.key) ? (ev.key === '-' ? 'Minus' : `Digit${ev.key}`) : '');
+  const index = SESSION_CODES.indexOf(code);
+  if (index < 0) return null;
+  const team = ev.shiftKey ? 1 - leftTeam(match) : leftTeam(match);
+  const seat = screenPlaces(match, team)[index];
+  return seat === undefined ? null : { team, seat };
 }
 
 // Whether a seat can answer the starter now: someone is in it, its team still has a turn, and
@@ -82,7 +97,7 @@ function timeCalledKey(d, match) {
   return over ? null : action({ type: 'timeCalled' });
 }
 
-// ev = { key, shiftKey, metaKey, ctrlKey, repeat, inTextField }
+// ev = { key, code, shiftKey, metaKey, ctrlKey, repeat, inTextField }
 // ui = { selected: null | { team, seat }, keysOn }
 // Returns { select: { team, seat } }, { action: <engine action> }, { ui: 'undo' | 'redo' | 'cancel' }, { hint: text },
 // or null for a key that does nothing. Nothing is done while typing in a text box (the page's own
@@ -96,7 +111,7 @@ export function keyToCommand(ev, ui, d, match) {
   }
   if (!ui.keysOn) return null;
   const key = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
-  const seat = seatOfKey(key, match);
+  const seat = isSession(match) ? sessionSeatOfKey(ev, match) : seatOfKey(key, match);
   if (seat) return canAnswer(d, match, seat) ? { select: seat } : null;
   if (Object.hasOwn(RESULT_KEYS, key)) return resultKey(RESULT_KEYS[key], ui.selected, d, match);
   if (Object.hasOwn(PART_KEYS, key)) return partKey(PART_KEYS[key], d);

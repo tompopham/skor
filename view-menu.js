@@ -9,6 +9,7 @@
 import { clockRunning } from './clock.js';
 import { h } from './dom.js';
 import { teamName, leftRight } from './view-common.js';
+import { isSession } from './session.js';
 
 const group = (title, ...items) => ({ title, items });
 
@@ -37,6 +38,7 @@ export function menuModel(match, d, { keysOn, namesHidden, updateReady, winFile 
       { value: 'halftime', label: 'Halftime (score check)', full: true, ...why(!halftimeOk, halftimeWhy) }),
     group('Players and questions',
       { value: 'subs', label: 'Swap players', full: true, ...why(!swapReady, 'between questions only') },
+      ...(isSession(match) ? [{ value: 'players', label: 'Players', full: true, ...why(!swapReady, 'between questions only') }] : []),   // 1.12.0: a session's Players screen
       { value: 'protest', label: 'Protest', ...why(!aim, 'no question yet') },
       { value: 'throwout', label: 'Throw out', ...why(!aim, 'no question yet') }),
     group('Match',
@@ -47,9 +49,9 @@ export function menuModel(match, d, { keysOn, namesHidden, updateReady, winFile 
   const more = [
     group('Screen and keys',
       { value: 'swap', label: 'Swap sides' },
-      { value: 'reverse', label: 'Reverse seat order' },
+      ...(isSession(match) ? [] : [{ value: 'reverse', label: 'Reverse seat order' }]),   // not in a session (spec 6.4)
       { value: 'keys', label: 'Single-key shortcuts', full: true, toggle: true, pressed: keysOn, sub: keysOn ? 'on' : 'off' },
-      { value: 'win', label: 'Win %', full: true, sub: winFile ?? 'no ratings file' }),
+      ...(isSession(match) ? [] : [{ value: 'win', label: 'Win %', full: true, sub: winFile ?? 'no ratings file' }])),   // the chance is hidden in a session (spec 6.5)
     group('Room board',
       { value: 'board', label: 'Open room board', full: true },
       { value: 'boardnames', label: 'Player names on board', full: true, toggle: true, pressed: !namesHidden, sub: namesHidden ? 'hidden' : 'shown' }),

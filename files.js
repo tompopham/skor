@@ -15,6 +15,7 @@ import { FORMATS } from './engine.js';
 import { timeSummary, formatLength } from './clock.js';
 import { leftRight, repeatText } from './view-common.js';
 import { lineupAt, lineupsOf, playerName as nameOf } from './lineup.js';
+import { isSession, seatCount } from './session.js';
 import { STATUS_WORDS } from './protests.js';
 import { allProtests, protestPieces, questionWords, thrownOutLines } from './view-protest.js';
 
@@ -110,7 +111,8 @@ const PLAYER_COLUMNS = [
   { header: 'Interrupts without penalty', value: p => p.interruptsNoPenalty },
   { header: 'Tossup points', value: p => p.tossupPoints },
   { header: 'Starters heard', value: p => p.heard },
-  { header: 'Points per 20 starters heard', value: p => (p.heard === 0 ? DASH : fixed(p.pp20)) },
+  // Other (a buzzer session's several people) has no points per 20: its pp20 is null and the cell is blank.
+  { header: 'Points per 20 starters heard', value: p => (p.pp20 === null || p.pp20 === undefined ? '' : p.heard === 0 ? DASH : fixed(p.pp20)) },
 ];
 
 const TEAM_COLUMNS = [
@@ -147,6 +149,9 @@ function usedGroups(match, d) {
 const namedPlayers = (match, d) => leftRight(match).flatMap(team =>
   d.stats.players[team].filter(stats => stats.name !== '').map(stats => [team, stats]));
 
+// The CSV's Seat column: the starter's seat number, "Bench" for the team's list (in a session "Joined": someone who joined or moved in), and in a session "Other" for Other.
+const seatWord = (match, stats) => (stats.other === true ? 'Other' : stats.seat === null ? (isSession(match) ? 'Joined' : 'Bench') : stats.seat + 1);
+
 // ---- Swaps (v2 4.4) ---------------------------------------------------------------------------
 
 // Each swap as a line of the sheet, in marker order: { index, marker, team, after, text, what, html }. `index` is the
@@ -156,6 +161,7 @@ const namedPlayers = (match, d) => leftRight(match).flatMap(team =>
 // is found from the line-up with every swap made earlier applied, so a swap reads right whatever came before it.
 // A marker that is not well formed, or whose question is no longer in the record, is left out.
 export function swapLines(match) {
+  if (isSession(match)) return sessionMoveLines(match);
   const place = new Map(match.cycles.map((cycle, i) => [cycle.id, i + 1]));
   return match.markers.flatMap((marker, index) => {
     if (marker.type !== 'sub' || (marker.team !== 0 && marker.team !== 1) || !Number.isInteger(marker.seat) || marker.seat < 0 || marker.seat > 3) return [];
@@ -178,6 +184,58 @@ export function swapLines(match) {
       html: esc(prefix) + pieces.map(([kind, text]) => (kind === 'name' ? nameHTML(text) : esc(text))).join(''),
     }];
   });
+}
+
+// A buzzer session's lines (SPEC-partB 6.6), in the same shape as a game's swap lines: "James moved from Parth to Nick after
+// Q10.", "Mei joined Parth after Q6." (a player put into a place that was empty just before: Add player, or bringing back
+// someone taken off), "Ann left Parth after Q8." (Take off) and "Mei came on for Ann in Parth after Q8." (a swap in a
+// seat). A line before the first question ends "before Q1." `text` is the whole line, `what` the line without its last
+// words ("James moved from Parth to Nick"), which the cycle editor puts after "the swap".
+function sessionMoveLines(match) {
+  const place = new Map(match.cycles.map((cycle, i) => [cycle.id, i + 1]));
+  const places = seatCount(match);
+  const okTeam = team => team === 0 || team === 1;
+  return match.markers.flatMap((marker, index) => {
+    const isMove = marker.type === 'move', isSub = marker.type === 'sub';
+    if ((!isMove && !isSub) || !okTeam(marker.team) || !Number.isInteger(marker.seat) || marker.seat < 0 || marker.seat >= places) return [];
+    const after = (marker.afterCycleId ?? null) === null ? 0 : place.get(marker.afterCycleId);
+    if (after === undefined) return [];
+    const { team, seat } = marker;
+    const own = teamName(match, team);
+    const who = id => nameOf(match, team, id) || 'someone';
+    let pieces;
+    if (isMove) {
+      if (typeof marker.player !== 'string') return [];
+      pieces = [['name', who(marker.player)], ['text', ' moved from '], ['name', own], ['text', ' to '], ['name', teamName(match, 1 - team)]];
+    } else {
+      const player = typeof marker.player === 'string' ? marker.player : null;
+      const offId = lineupAt({ ...match, markers: match.markers.slice(0, index) }, after)[team][seat];
+      if (player !== null && offId !== null) pieces = [['name', who(player)], ['text', ' came on for '], ['name', who(offId)], ['text', ' in '], ['name', own]];
+      else if (player !== null) pieces = [['name', who(player)], ['text', ' joined '], ['name', own]];
+      else if (offId !== null) pieces = [['name', who(offId)], ['text', ' left '], ['name', own]];
+      else return [];
+    }
+    const tail = after === 0 ? ' before Q1.' : ` after Q${after}.`;
+    const join = list => list.map(([, text]) => text).join('');
+    return [{
+      index, marker, team, after, text: join(pieces) + tail, what: join(pieces),
+      html: pieces.map(([kind, text]) => (kind === 'name' ? nameHTML(text) : esc(text))).join('') + esc(tail),
+    }];
+  });
+}
+
+// "Halftime: Parth 120, Nick 95" (SPEC-partB 6.6, decision 7): a session's sheet only, after the question where halftime fell.
+// Returns { index, pieces } (index: that question's place) or null for a game, or when halftime has not been reached.
+function halftimeRow(match, d) {
+  if (!isSession(match) || d.phase.halftimeAfterCycleId === null || d.phase.halftimeAfterCycleId === undefined) return null;
+  const index = match.cycles.findIndex(cycle => cycle.id === d.phase.halftimeAfterCycleId);
+  if (index < 0) return null;
+  const [left, right] = leftRight(match);
+  const running = d.cycles[index].running;
+  return {
+    index,
+    pieces: [['text', 'Halftime: '], ['name', teamName(match, left)], ['text', ` ${running[left]}, `], ['name', teamName(match, right)], ['text', ` ${running[right]}`]],
+  };
 }
 
 // ---- The result line and the file name --------------------------------------------------------
@@ -286,7 +344,7 @@ export function toCSV(match, d) {
   }
   lines.push('', csvRow(['Player', 'Team', 'Seat', ...PLAYER_COLUMNS.map(c => c.header)]));
   for (const [team, stats] of namedPlayers(match, d)) {
-    lines.push(csvRow([stats.name, teamName(match, team), stats.seat === null ? 'Bench' : stats.seat + 1, ...PLAYER_COLUMNS.map(c => c.value(stats))], 2));
+    lines.push(csvRow([stats.name, teamName(match, team), seatWord(match, stats), ...PLAYER_COLUMNS.map(c => c.value(stats))], 2));
   }
   lines.push('', csvRow(['Team', ...TEAM_COLUMNS.map(c => c.header)]));
   for (const team of order) lines.push(csvRow([teamName(match, team), ...TEAM_COLUMNS.map(c => c.value(d.stats.teams[team]))], 1));
@@ -369,16 +427,18 @@ const numCell = value => `<td class="num">${esc(value)}</td>`;
 const timeCell = value => `<td class="time">${esc(value)}</td>`;
 
 // What a seat did in a cycle, in points: "P 15", "10", "N -5", "W 0", "40 (clue 1)", "S 3 (15)".
-function seatMarks(cycle, dc, team, seat) {
+function seatMarks(cycle, dc, team, seat, lineup = null, id = null) {
+  // A session's column is a player, not a place: the buzzes of whoever sat in a place that question (lineup) with that id.
+  const mine = place => (id === null ? place === seat : lineup[team][place] === id);
   const marks = [];
   cycle.buzzes.forEach((buzz, i) => {
-    if (buzz.team !== team || buzz.seat !== seat) return;
+    if (buzz.team !== team || !mine(buzz.seat)) return;
     const mark = RESULT_MARKS[buzz.result] ?? '';
     const clue = dc.format === 'jackpot' ? ` (clue ${(buzz.clue ?? 0) + 1})` : '';
     marks.push(`${mark === '' ? '' : `${mark} `}${dc.buzzes[i].points}${clue}`);
   });
   for (const turn of dc.streak) {
-    if (turn.team === team && turn.seat === seat) marks.push(`S ${turn.answers}${turn.wrong ? ' wrong' : ''} (${turn.points})`);
+    if (turn.team === team && mine(turn.seat)) marks.push(`S ${turn.answers}${turn.wrong ? ' wrong' : ''} (${turn.points})`);
   }
   return marks.join(' / ');
 }
@@ -407,6 +467,13 @@ function quarterRows(match, d) {
   return rows;
 }
 
+// The player columns of a team in the question grid: a game's four seats, or a session's players who had a place (derive()'s
+// rows, which are exactly those who sat in a question or sit for the next one, Other last): { seat, id, label }.
+function playerColumns(match, d, team) {
+  if (!isSession(match)) return [0, 1, 2, 3].map(seat => ({ seat, id: null, label: seatName(match, team, seat) || DASH }));
+  return d.stats.players[team].map(stats => ({ seat: null, id: stats.id, label: stats.name }));
+}
+
 function cycleTable(match, d, groups) {
   const { rules } = match;
   const order = leftRight(match);
@@ -414,16 +481,17 @@ function cycleTable(match, d, groups) {
   const closedAt = timeSummary(match, d).closedAt;
   const showType = Boolean(rules.trivia) || rules.starterTypes.on || match.cycles.some(c => c.type !== 'normal');
   const extras = [['bonus', 'Bonus'], ['bounce', 'Bounce'], ['reward', 'Reward']].filter(([group]) => groups.has(group));
-  const perTeam = 4 + extras.length + 2;
+  const cols = order.map(team => playerColumns(match, d, team));
+  const perTeam = order.map((_, k) => cols[k].length + extras.length + 2);
   const leading = 1 + (showType ? 1 : 0) + (groups.has('bonus') ? 1 : 0);
-  const columns = leading + 2 * perTeam + 2;
+  const columns = leading + perTeam[0] + perTeam[1] + 2;
 
   const head1 = ['<th rowspan="2">Q</th>', showType ? '<th rowspan="2">Type</th>' : '',
     groups.has('bonus') ? '<th rowspan="2">Bonus set</th>' : '',
-    ...order.map(team => `<th colspan="${perTeam}">${nameHTML(teamName(match, team))}</th>`),
+    ...order.map((team, k) => `<th colspan="${perTeam[k]}">${nameHTML(teamName(match, team))}</th>`),
     '<th rowspan="2">Closed at</th>', '<th rowspan="2">Notes</th>'].join('');
-  const head2 = order.map(team => [
-    ...[0, 1, 2, 3].map(seat => `<th class="seat">${nameHTML(seatName(match, team, seat) || DASH)}</th>`),
+  const head2 = order.map((team, k) => [
+    ...cols[k].map(col => `<th class="seat">${nameHTML(col.label)}</th>`),
     ...extras.map(([, label]) => `<th class="num">${label}</th>`),
     '<th class="num">Total</th>', '<th class="num">Running</th>',
   ].join('')).join('');
@@ -433,8 +501,10 @@ function cycleTable(match, d, groups) {
   // Each swap is a row after the question it follows (-1: before the first), its marker number on the row for the
   // sheet's Delete. The saved file has the row and no button.
   const swaps = swapLines(match);
+  const half = halftimeRow(match, d);
   const markerRows = index => [
     ...(quarters.get(index) ?? []).map(text => `<tr class="marker"><td colspan="${columns}">${esc(text)}</td></tr>`),
+    ...(half && half.index === index ? [`<tr class="marker halftime"><td colspan="${columns}">${piecesHTML(half.pieces)}</td></tr>`] : []),
     ...swaps.filter(swap => swap.after - 1 === index)
       .map(swap => `<tr class="marker swap" data-marker="${swap.index}"><td colspan="${columns}"><span class="swaptext">${swap.html}</span></td></tr>`),
   ];
@@ -447,10 +517,11 @@ function cycleTable(match, d, groups) {
       ...cycle.lostTurn.map(team => `${nameHTML(teamName(match, team))} lost its turn`),
       ...[...statusWords(dc, cycle).map(capitalise), dc.bonusRepeatOf === null ? '' : repeatText(dc.bonusNumber, dc.bonusRepeatOf),
         String(cycle.note ?? '').trim()].filter(Boolean).map(esc)].filter(Boolean);
-    const teamCells = team => {
+    const teamCells = (team, k) => {
       const points = (value, shown) => numCell(counted && shown ? value : '');
       return [
-        ...[0, 1, 2, 3].map(seat => `<td class="seat">${seatCellHTML(match, cycle, dc, team, seat, lineups[i])}</td>`),
+        ...cols[k].map(col => `<td class="seat">${col.id === null ? seatCellHTML(match, cycle, dc, team, col.seat, lineups[i])
+          : esc(seatMarks(cycle, dc, team, null, lineups[i], col.id))}</td>`),
         ...extras.map(([group]) => {
           if (group === 'bonus') return points(dc.ownBonus[team], controller === team);
           if (group === 'bounce') return points(dc.bounce[team], dc.bounce[team] !== 0);
@@ -486,8 +557,10 @@ export function sheetRows(match, d) {
   const thrown = thrownOutLines(match, d);
   const quarters = quarterRows(match, d);
   const swaps = swapLines(match);
+  const half = halftimeRow(match, d);
   const markerRows = index => [
     ...(quarters.get(index) ?? []).map(text => ({ kind: 'marker', text })),
+    ...(half && half.index === index ? [{ kind: 'marker', text: half.pieces.map(([, text]) => text).join('') }] : []),
     ...swaps.filter(swap => swap.after - 1 === index).map(swap => ({ kind: 'swap', index: swap.index, text: swap.text })),
   ];
   const rows = [...markerRows(-1)];
@@ -518,6 +591,25 @@ export function sheetRows(match, d) {
     rows.push(...markerRows(i));
   });
   return { teams: order.map(team => teamName(match, team)), rows };
+}
+
+// A session too wide for paper (Task 6, 1.12.0): over this many player columns in all, the question grid's names break into single
+// letters on A4 (10 named + Other a side makes 22), so the saved file and the printed page use the list instead (spec 6.6).
+export const PRINT_LIST_LIMIT = 12;
+export const wideSession = (match, d) => isSession(match)
+  && leftRight(match).reduce((count, team) => count + playerColumns(match, d, team).length, 0) > PRINT_LIST_LIMIT;
+
+// The list as a table for paper: Q, what happened, and the two running scores, from sheetRows (the screen's list), so the two
+// cannot disagree. Its class is plist, not cycles, so the screen's row buttons and sticky heads leave it alone.
+function listTable(match, d) {
+  const { teams, rows } = sheetRows(match, d);
+  const body = rows.map(row => {
+    if (row.kind !== 'cycle') return `<tr class="marker${row.kind === 'thrown' ? ' thrown' : ''}"><td colspan="4">${esc(row.text)}</td></tr>`;
+    return `<tr class="prow${row.counted ? '' : ' after-end'}"><td class="num">${row.number}</td><td class="lwhat">${esc(row.what)}${row.note ? `<br><i>${esc(row.note)}</i>` : ''}</td>`
+      + `<td class="num">${esc(String(row.running[0]))}</td><td class="num">${esc(String(row.running[1]))}</td></tr>`;
+  });
+  const head = `<tr><th>Q</th><th>What happened</th>${teams.map(name => `<th class="num">${nameHTML(name)}</th>`).join('')}</tr>`;
+  return `<div class="wide"><table class="plist">\n<thead>${head}</thead>\n<tbody>\n${body.length > 0 ? body.join('\n') : '<tr><td colspan="4">No questions yet.</td></tr>'}\n</tbody></table></div>`;
 }
 
 function statsTables(match, d, groups) {
@@ -554,9 +646,15 @@ function protestsSection(match, d) {
 
 // The whole scoresheet as one standalone page: no script, no outside file, so it prints or sends as
 // it is. Everything from the match record goes through esc().
-export function toScoresheetHTML(match, d) {
+// `screen` is the scoresheet page's own use: for a session too wide for paper it keeps the grid on screen and adds the list for
+// print (hidden on screen, shown in print, where the grid is hidden); the saved file has the list alone.
+export function toScoresheetHTML(match, d, { screen = false } = {}) {
   const groups = usedGroups(match, d);
   const title = leftRight(match).map(team => teamName(match, team)).join(' v ');
+  const grid = cycleTable(match, d, groups);
+  const table = !wideSession(match, d) ? grid
+    : screen ? `${grid.replace('<div class="wide">', '<div class="wide noprint">')}\n${listTable(match, d).replace('<div class="wide">', '<div class="wide printonly">')}`
+      : listTable(match, d);
   return `<!doctype html>
 <html lang="en-GB">
 <head>
@@ -569,7 +667,7 @@ export function toScoresheetHTML(match, d) {
 <h1>${resultPieces(match, d).map(([kind, text]) => (kind === 'name' ? nameHTML(text) : esc(text))).join('')}</h1>
 <p class="details">${esc(detailsLine(match))}</p>
 ${timeLineHTML(match, d)}
-${cycleTable(match, d, groups)}
+${table}
 <p class="key">Each player's cell shows the points from the buzz: P is a power, N a wrong interruption, W a wrong answer after the question ended, S a Streak turn.</p>
 ${protestsSection(match, d)}${statsTables(match, d, groups)}
 <p class="foot">Unofficial scoresheet from Skor.</p>

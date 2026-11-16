@@ -10,7 +10,7 @@
 
 import { derive } from './engine.js';
 import { toScoresheetHTML, toCSV, resultLine, fileName, offerFile, sheetRows } from './files.js';
-import { canSaveQbj, QBJ_TRIVIA } from './qbj.js';
+import { canSaveQbj, qbjReason } from './qbj.js';
 import { qbjDialog } from './view-qbj.js';
 import { listMatchesReport, loadMatch, getCurrent } from './storage.js';
 import { h } from './dom.js';
@@ -118,7 +118,7 @@ const noMatch = (root, api) => root.append(h('div', { class: 'unbuilt' }, h('h1'
 // The saved file's body as nodes for this page: its title line, details, the two tables and the notes.
 // toScoresheetHTML escapes everything it writes, and a parsed page runs no script.
 function sheetNodes(match, d) {
-  const page = new DOMParser().parseFromString(toScoresheetHTML(match, d), 'text/html');
+  const page = new DOMParser().parseFromString(toScoresheetHTML(match, d, { screen: true }), 'text/html');
   return [...page.body.children].map(node => document.importNode(node, true));
 }
 
@@ -292,7 +292,7 @@ function fileActions(state, api, say) {
     ['copy', 'Copy result line', copyLine],
     ['send', 'Send match', () => api.sendMatch()],
     // Added last, so no earlier button moves. A trivia match gets the reason in its place, not a button.
-    canSaveQbj(state.match) ? ['qbj', 'Save QBJ file', () => qbjDialog(state, api)] : ['qbj', QBJ_TRIVIA, null],
+    canSaveQbj(state.match) ? ['qbj', 'Save QBJ file', () => qbjDialog(state, api)] : ['qbj', qbjReason(state.match), null],
   ];
 }
 

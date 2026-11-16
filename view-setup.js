@@ -13,6 +13,8 @@
 // Version 1.11.0 (SPEC-partB 3.4 and 3.5): Match details gain Room and the tournament file's Load and Remove; with a file
 // loaded, a team name box offers the registered teams and fills the seats from the one picked (view-tournament.js), a
 // name not in the file is marked, and Start needs the round as a whole number.
+// Version 1.12.0 (SPEC-partB 6.4): a choice under the format, Game or Buzzer session (view-setup-session.js). In a session each
+// team shows 4 name boxes and Add player (up to 10), no Bench, and Start needs no round and builds the session record.
 
 import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset, presetUnverified } from './presets.js';
 import { newMatch } from './engine.js';
@@ -21,6 +23,8 @@ import { h, newId } from './dom.js';
 import { renderRulesScreen, rulesDiffer } from './view-rules.js';
 import { ratingMarks } from './view-win.js';
 import { roundProblem } from './tournament.js';
+import { sessionOffered, sessionOn, shownSeats, addSeatBox, sessionSeats, sessionRoster, modeChoice, otherNameProblem, START_BOXES } from './view-setup-session.js';
+import { NAMED_PLACES } from './session.js';
 import { tournamentNow, tournamentStatus, tournamentRow, teamList, teamPicker } from './view-tournament.js';
 
 // ---- Small helpers -------------------------------------------------------------------------
@@ -37,6 +41,7 @@ function freshDraft() {
     teams: [0, 1].map(() => ({ name: '', seats: ['', '', '', ''], bench: ['', ''] })),
     details: { competition: '', venue: '', round: '', room: '', reader: '', scorer: '' },
     open: { details: false, bench: [false, false] },
+    session: false,   // 1.12.0: a buzzer session (view-setup-session.js); false is a game
   };
 }
 
@@ -91,8 +96,8 @@ export function alikeWarning(seats) {
 // bench boxes while they are open. The box after `id`, or null after the last one (and for any other box), so Enter can never
 // reach Start.
 function nameBoxes(draft) {
-  return [0, 1].flatMap(t => [`team${t}-name`, ...[0, 1, 2, 3].map(seat => `team${t}-seat${seat}`),
-    ...(draft.open?.bench?.[t] ? (draft.teams[t].bench ?? []).map((_, place) => `team${t}-bench${place}`) : [])]);
+  return [0, 1].flatMap(t => [`team${t}-name`, ...Array.from({ length: shownSeats(draft, t) }, (_, seat) => `team${t}-seat${seat}`),
+    ...(draft.open?.bench?.[t] && !sessionOn(draft) ? (draft.teams[t].bench ?? []).map((_, place) => `team${t}-bench${place}`) : [])]);
 }
 export function nextBox(draft, id) {
   const boxes = nameBoxes(draft);
@@ -166,12 +171,14 @@ function formatSelect(draft, onPick) {
 // many bench names are typed, and opens the bench boxes under the seats. `changed` is told when the boxes Enter walks change.
 function teamCard(draft, t, rosterId, changed, now) {
   const team = draft.teams[t];
+  const session = sessionOn(draft);   // 1.12.0: up to 10 name boxes and no bench
   const side = t === 0 ? 'Left' : 'Right';
   const warning = h('p', { class: 'msg', id: `team${t}-alike` });
   const seatBoxes = [];
   const showWarning = () => {
-    warning.textContent = alikeWarning(team.seats);
-    const alike = new Set(nearDuplicateSeats(team.seats).flat());
+    const typed = team.seats.slice(0, shownSeats(draft, t));
+    warning.textContent = alikeWarning(typed);
+    const alike = new Set(nearDuplicateSeats(typed).flat());
     seatBoxes.forEach((box, seat) => box.classList.toggle('alike', alike.has(seat)));
   };
   const gutter = text => h('span', { class: 'gut', 'aria-hidden': 'true' }, text);
@@ -190,16 +197,35 @@ function teamCard(draft, t, rosterId, changed, now) {
   const showBenchCount = () => { benchButton.textContent = `Bench (${benchCount()})`; };
   showBenchCount();
 
-  const seatRows = [0, 1, 2, 3].map(seat => {
+  const seatRow = seat => {
     const input = h('input', {
       id: `team${t}-seat${seat}`, list: rosterId, maxlength: 40, autocomplete: 'off', autocapitalize: 'words', autocorrect: 'off', spellcheck: 'false',
-      placeholder: seat === 3 ? 'Leave empty if playing three' : 'Name',
-      'aria-label': `${side} team, seat ${seat + 1}`,
+      placeholder: seat === 3 && !session ? 'Leave empty if playing three' : 'Name',
+      'aria-label': `${side} team, ${session ? 'player' : 'seat'} ${seat + 1}`,
     });
-    input.value = team.seats[seat];
+    input.value = team.seats[seat] ?? '';
     input.addEventListener('input', () => { team.seats[seat] = input.value; showWarning(); });
-    seatBoxes.push(input);
+    seatBoxes[seat] = input;
     return h('div', { class: 'trow' }, gutter(String(seat + 1)), input, marks.mark(input));
+  };
+  // The seat boxes in one holder, so a session's Add player and a tournament roster can change how many there are.
+  const seatHolder = h('div', { class: 'seatrows' });
+  const drawSeats = () => {
+    seatBoxes.length = 0;
+    seatHolder.replaceChildren(...Array.from({ length: shownSeats(draft, t) }, (_, seat) => seatRow(seat)));
+  };
+  drawSeats();
+  const addPlayer = session ? h('button', { type: 'button', class: 'btn', id: `team${t}-add-player` }, 'Add player') : null;
+  const showAdd = () => { if (addPlayer) addPlayer.hidden = shownSeats(draft, t) >= NAMED_PLACES; };
+  showAdd();
+  addPlayer?.addEventListener('click', () => {
+    const seat = addSeatBox(draft, t);
+    if (seat === null) return;
+    const row = seatRow(seat);
+    seatHolder.append(row);
+    showAdd();
+    changed();
+    row.querySelector('input').focus();
   });
   showWarning();
 
@@ -234,6 +260,17 @@ function teamCard(draft, t, rosterId, changed, now) {
   // With a tournament file (1.11.0): the name box offers its teams, and picking one fills the seats and the bench in place,
   // so a phone keeps its keyboard. Every box is told, so the near-duplicate line and the "not rated" marks follow.
   const fill = (seats, bench) => {
+    if (session) {
+      // A session card holds up to 10 names: the boxes are drawn again for as many as the roster has (4 at least).
+      const roster = sessionRoster(seats);
+      team.seats = [...roster.seats, ...Array(NAMED_PLACES - roster.seats.length).fill('')].slice(0, roster.shown);
+      drawSeats();
+      showAdd();
+      showWarning();
+      changed();
+      return;
+    }
+    team.seats.length = START_BOXES;   // a game has 4 seats: names left in a session's later boxes are dropped
     seatBoxes.forEach((box, seat) => { box.value = seats[seat]; box.dispatchEvent(new Event('input')); });
     team.bench = bench.length > 0 ? [...bench] : ['', ''];
     benchBlock.querySelectorAll('.trow.bench').forEach(row => row.remove());
@@ -241,8 +278,9 @@ function teamCard(draft, t, rosterId, changed, now) {
     showBenchCount();
     changed();
   };
-  const boxes = () => ({ seats: [...team.seats], bench: [...team.bench] });
-  const picker = teamPicker(now, team, fill, boxes);
+  const size = session ? NAMED_PLACES : START_BOXES;
+  const boxes = () => ({ seats: Array.from({ length: size }, (_, i) => team.seats[i] ?? ''), bench: session ? [] : [...team.bench] });
+  const picker = teamPicker(now, team, fill, boxes, size);
   if (picker.listId) name.setAttribute('list', picker.listId);
   // A pick from the list may come on some browsers only as a change, so a change decides a name the typing did not; it
   // never decides the same name again, which would redraw the line (and its offer button) as the box loses focus.
@@ -252,7 +290,7 @@ function teamCard(draft, t, rosterId, changed, now) {
   name.addEventListener('change', () => { if (name.value !== decided) decide(); });
 
   return h('div', { class: 'card tcard' }, h('h2', {}, `${side} team`),
-    h('div', { class: 'trow' }, gutter(''), name, benchButton), picker.line, seatRows, warning, marks.line, benchBlock);
+    h('div', { class: 'trow' }, gutter(''), name, session ? null : benchButton), picker.line, seatHolder, addPlayer, warning, marks.line, session ? null : benchBlock);
 }
 
 // A section after the teams that shows only when its button in the top bar has opened it (Rules, Match details). The
@@ -284,7 +322,7 @@ const detailsContent = (draft, now, api, redraw) => h('div', { class: 'inner' },
 // boxes, trimmed, with the empty boxes left out. No captain is asked for since 1.9.0, so none is recorded.
 export function teamsFromDraft(draft) {
   return draft.teams.map((team, t) => {
-    const seats = team.seats.map(name => name.trim());
+    const seats = team.seats.slice(0, START_BOXES).map(name => name.trim());
     const typed = seats.some(Boolean);
     return {
       name: team.name.trim() || `Team ${SIDE[t]}`,
@@ -293,6 +331,12 @@ export function teamsFromDraft(draft) {
       captain: null,
     };
   });
+}
+
+// A buzzer session's teams (1.12.0): the named players typed, up to 10, with no bench and no A1 to A4 for an empty team
+// (everyone then plays on Other). Used when sessionOn(draft).
+export function sessionTeamsFromDraft(draft) {
+  return draft.teams.map((team, t) => ({ name: team.name.trim() || `Team ${SIDE[t]}`, seats: sessionSeats(team), bench: [], captain: null }));
 }
 
 export function renderSetup(root, state, api) {
@@ -318,9 +362,13 @@ export function renderSetup(root, state, api) {
       });
       if (choice !== 'switch') { format.value = draft.presetId; return; }
     }
+    const offered = sessionOffered(draft.presetId);
     draft.presetId = id;
     draft.rules = rulesFromPreset(id);
     summary.textContent = rulesSummary(draft.rules);
+    // A format that is not played as a session forces Game; the choice itself is drawn only where it is offered.
+    if (!sessionOffered(id)) draft.session = false;
+    if (offered !== sessionOffered(id)) redraw();
   });
   const rulesButton = h('button', {
     type: 'button', class: 'btn small', id: 'setup-rules',
@@ -334,10 +382,11 @@ export function renderSetup(root, state, api) {
   // The message sits above Start, so the button keeps its place at the foot of the bar; it goes once the round will do.
   const startMsg = h('p', { class: 'msg', id: 'start-msg', role: 'status' });
   detailsSection.addEventListener('input', event => {
-    if (event.target.id === 'detail-round' && !roundProblem(draft.details.round, now.tournament, draft.rules)) startMsg.textContent = '';
+    if (event.target.id === 'detail-round' && !roundProblem(draft.details.round, now.tournament, draft.rules, sessionOn(draft))) startMsg.textContent = '';
   });
   function startFromDraft() {
-    const problem = roundProblem(draft.details.round, now.tournament, draft.rules);
+    const session = sessionOn(draft);
+    const problem = roundProblem(draft.details.round, now.tournament, draft.rules, session);
     if (problem) {
       startMsg.textContent = problem;
       detailsSection.open = true;
@@ -346,8 +395,11 @@ export function renderSetup(root, state, api) {
       document.getElementById('detail-round')?.focus();
       return;
     }
-    const teams = teamsFromDraft(draft);
-    const typed = draft.teams.flatMap(team => [...team.seats, ...(team.bench ?? [])].map(name => name.trim()).filter(Boolean));
+    const otherProblem = otherNameProblem(draft);
+    if (otherProblem) { startMsg.textContent = otherProblem; return; }
+    const teams = session ? sessionTeamsFromDraft(draft) : teamsFromDraft(draft);
+    const typed = session ? teams.flatMap(team => team.seats)
+      : draft.teams.flatMap(team => [...team.seats.slice(0, START_BOXES), ...(team.bench ?? [])].map(name => name.trim()).filter(Boolean));
     saveRoster([...typed, ...loadRoster()]);
     const match = newMatch({
       rules: draft.rules,
@@ -355,6 +407,7 @@ export function renderSetup(root, state, api) {
       details: Object.fromEntries(Object.entries(draft.details).map(([key, value]) => [key, value.trim()])),
       id: newId(),
       now: api.now(),
+      ...(session ? { session: true } : {}),
     });
     api.setUi({ setup: null }, false);
     api.startMatch(match);
@@ -365,11 +418,14 @@ export function renderSetup(root, state, api) {
   const keyLabels = () => form.querySelectorAll('.tcard input').forEach(box => box.setAttribute('enterkeyhint', nextBox(draft, box.id) === null ? 'done' : 'next'));
   const form = h('form', { novalidate: true, autocomplete: 'off' },
     summary,
+    modeChoice(draft, redraw),
     tournamentStatus(now),
     h('div', { class: 'grid2 tcards' }, teamCard(draft, 0, rosterId, () => keyLabels(), now), teamCard(draft, 1, rosterId, () => keyLabels(), now)),
     detailsSection,
     h('div', { class: 'startbar' }, startMsg, start),
-    h('p', { class: 'hint', id: 'setup-hint' }, 'Names are saved on this device for next time. A team with no names gets seats A1 to A4 (B1 to B4).'));
+    h('p', { class: 'hint', id: 'setup-hint' }, sessionOn(draft)
+      ? 'Names are saved on this device for next time. A team may start with no names: everyone is then on Other, which is always there.'
+      : 'Names are saved on this device for next time. A team with no names gets seats A1 to A4 (B1 to B4).'));
 
   // Only the Start button starts a match. The form never submits, so Enter or a phone keyboard's
   // Go key in a rule or details box does nothing, and a half-typed form cannot start by accident. In a name box Enter moves to

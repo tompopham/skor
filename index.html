@@ -49,6 +49,14 @@ button { font: inherit; color: inherit; touch-action: manipulation; -webkit-touc
 .seat .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seat .pt { font-variant-numeric: tabular-nums; }
 .seat .key { color: var(--muted); font-size: 12px; margin-right: 6px; }
+.pgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+/* A buzzer session's place (spec 6.5, layout A): name on top, points under in smaller text, 6 px each side so a long name
+   keeps more letters, and 48 px high on a touch screen (44 px with a mouse, so 11 places fit a laptop window). */
+.seat.pl { grid-template-columns: minmax(0, 1fr); align-content: center; gap: 0; padding: 2px 6px; min-height: 44px; }
+.seat.pl .nm { display: block; }
+.seat.pl .pt { font-size: 12px; min-height: 15px; line-height: 15px; }
+.seat.pl .key { margin-right: 4px; }
+@media (hover: none), (pointer: coarse) { .seat.pl { min-height: 48px; } }
 .seat.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .seat.on .key { color: #cccccc; }
 .seat:disabled { color: var(--offfg); background: var(--off); border-color: #cccccc; cursor: default; }
@@ -151,6 +159,13 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 .tcards { gap: 8px; }
 .card.tcard { padding: 8px; gap: 4px; margin-bottom: 0; }
 .tcard h2 { font-size: 14px; }
+/* Buzzer session (1.12.0, SPEC-partB 6.4): the Game or Session choice under the format, and a session card's name boxes. */
+/* Game / Buzzer session (1.12.0): two chips side by side, 48 px like every button. With a mouse the name boxes give back 8 px each
+   (only where the choice is offered), so Setup still fits Tom's 756 x 470 window and a 900 px laptop screen without a scroll bar. */
+.modes { margin: 0 0 4px; }
+.modes .mode { min-height: 48px; flex: 1 1 0; font-size: 14px; padding: 4px 8px; }
+@media (pointer: fine) { #app[data-screen="setup"] .modes ~ .tcards input { min-height: 30px; padding-block: 3px; } }
+.seatrows { display: grid; gap: 4px; }
 @media (max-height: 520px) { .tcard h2 { display: none; } }
 .trow { display: grid; grid-template-columns: 20px minmax(0, 1fr) 88px; gap: 4px; align-items: stretch; }
 .trow .gut { align-self: center; text-align: center; font-size: 14px; color: var(--muted); }
@@ -307,6 +322,9 @@ details.fold.shut:not([open]) { display: none; }
   .main[data-stage="bonus"] .seat:nth-of-type(2) { grid-row: 7; }
   .main[data-stage="bonus"] .seat:nth-of-type(3) { grid-row: 8; }
   .main[data-stage="bonus"] .seat:nth-of-type(4) { grid-row: 9; }
+  /* A session's grid is one block of its own below the bonus panel, in its team's column; its places lay out inside it. */
+  .main[data-stage="bonus"] .pgrid { grid-row: 6; margin-top: 8px; }
+  .main[data-stage="bonus"] .pgrid .seat { grid-row: auto; margin-top: 0; }
   .main[data-stage="bonus"] > .banners { grid-column: 1 / -1; grid-row: 10; }
 }
 /* A phone (review 19/10/2026, change 16): the result buttons have 6 px at each side, so "Power 15" is one line in an 83 px
@@ -473,7 +491,10 @@ div.clockslot { border: 0; font-size: 18px; }
    split across pages, the column headings repeated on each page, and the stats on a page of their own.
    Plain black on white, like the saved scoresheet file (files.js SHEET_CSS), which these rules match. */
 @page { size: A4 landscape; margin: 10mm; }
+/* A wide session's list for paper (1.12.0): not on screen; in print it replaces the grid. */
+.printonly { display: none; }
 @media print {
+  .printonly { display: block !important; }
   html, body { background: #fff; color: #000; }
   #status, .noprint, .dialog { display: none !important; }
   .shell, #app { max-width: none; margin: 0; padding: 0; }

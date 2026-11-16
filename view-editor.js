@@ -6,6 +6,7 @@
 import { derive, applyAction } from './engine.js';
 import { swapLines } from './files.js';
 import { lineupAt, playerName } from './lineup.js';
+import { isSession, screenPlaces } from './session.js';
 import { editorCards } from './view-protest.js';
 import { h } from './dom.js';
 import {
@@ -186,15 +187,18 @@ export function renderCycleEditor(root, state, api) {
   // who really sat there and a later one the player swapped in. A seat nobody sat in has no name, as in version 1.
   const lineup = lineupAt(match, index);
   const seatName = (team, seat) => playerName(match, team, lineup[team][seat]);
+  // The places a team has: 4 seats in a game, a session's shown places and then Other (session.js screenPlaces). A game's stay
+  // in seat order whatever the scoring screen's Reverse seat order says.
+  const placesOf = team => (isSession(match) ? screenPlaces(match, team) : [0, 1, 2, 3]);
   const seatChoices = (current = null) => {
-    const options = [0, 1].flatMap(team => [0, 1, 2, 3]
+    const options = [0, 1].flatMap(team => placesOf(team)
       .filter(seat => seatName(team, seat) !== '' || (current && current.team === team && current.seat === seat))
       .map(seat => [`${team}:${seat}`, `${teamName(match, team)}: ${seatName(team, seat) || `seat ${seat + 1}`}`]));
     return options;
   };
   const firstFree = used => {
     const team = [0, 1].find(t => !used.includes(t)) ?? 0;
-    return { team, seat: [0, 1, 2, 3].find(seat => seatName(team, seat) !== '') ?? 0 };
+    return { team, seat: placesOf(team).find(seat => seatName(team, seat) !== '') ?? 0 };
   };
   const seatSelect = (entry, label) => select(seatChoices(entry), `${entry.team}:${entry.seat}`, value => {
     [entry.team, entry.seat] = value.split(':').map(Number);
@@ -372,6 +376,7 @@ export function renderCycleEditor(root, state, api) {
       if (marker.type === 'quarter') return `the end of quarter ${quarterNumber(marker)}`;
       if (marker.type === 'timeout') return `the timeout for ${teamName(match, marker.team)}`;
       if (marker.type === 'sub') return `the swap ${swapLines(match).find(line => line.marker === marker)?.what ?? ''}`.trim();
+      if (marker.type === 'move') return `${playerName(match, marker.team, marker.player)}'s move to ${teamName(match, 1 - marker.team)}`;
       return { ended: 'the end of the match', halftime: 'halftime', timeCalled: 'the time-called mark' }[marker.type] ?? marker.type;
     };
     const body = [`Q${number} and everything entered on it will be removed. Later questions move up one and the scores are worked out again.`];
@@ -379,7 +384,7 @@ export function renderCycleEditor(root, state, api) {
       const what = wordsFor(marker);
       if (before) body.push(`Q${number} carries ${what}. Deleting it moves ${what} back to ${before}.`);
       // A timeout was taken and a swap made, so with no earlier question each stays, now before the first one (the engine's deleteCycle).
-      else if (marker.type === 'timeout' || marker.type === 'sub') body.push(`Q${number} carries ${what}. Deleting it keeps ${what}, now before the first question.`);
+      else if (marker.type === 'timeout' || marker.type === 'sub' || marker.type === 'move') body.push(`Q${number} carries ${what}. Deleting it keeps ${what}, now before the first question.`);
       else body.push(`Q${number} carries ${what}. Deleting it removes ${what}, as there is no earlier question to move it to.`);
     }
     const choice = await api.ask({

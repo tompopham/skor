@@ -23,6 +23,9 @@ import { renderCycleEditor } from './view-editor.js';
 import { renderRulesScreen } from './view-rules.js';
 import { protestFlow, throwOutFlow, boundsWords } from './view-protest.js';
 import { swapFlow } from './view-swap.js';
+import { playersFlow } from './view-players.js';
+import { isSession } from './session.js';
+import { sessionTeamGrid } from './view-session-grid.js';
 import { scoreHead, winMenuLine } from './view-win.js';
 import { menuModel, showMenu } from './view-menu.js';
 import { legend, recentList } from './view-side.js';
@@ -78,7 +81,7 @@ function onKey(event) {
   const inTextField = target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
   const c = makeContext(state, api);
   const command = keyToCommand(
-    { key: event.key, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, repeat: event.repeat, inTextField },
+    { key: event.key, code: event.code, shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, repeat: event.repeat, inTextField },
     { selected: state.ui.selected ?? null, keysOn: keysAreOn() }, c.d, c.match);
   if (!command) return;
   event.preventDefault();
@@ -271,7 +274,7 @@ function teamsView(c) {
   return h('div', { class: 'teams' }, leftRight(match).map((team, column) => h('div', { class: 'team', 'data-team': team },
     h('div', { class: 'tname', title: teamName(match, team) }, h('span', { class: 'tn' }, teamName(match, team))),
     scoreHead(c, team),
-    seats.map((seat, row) => {
+    isSession(match) ? sessionTeamGrid(c, team, column, seatInfo) : seats.map((seat, row) => {
       const info = seatInfo(c, team, seat);
       const on = ui.selected?.team === team && ui.selected?.seat === seat;
       // The points are the player's own, whoever sat in the seat before.
@@ -587,6 +590,7 @@ async function openMenu(c) {
     case 'timeout1': return takeTimeout(now, 1);
     case 'halftime': return halftimeFlow(now);
     case 'subs': return swapFlow(now);
+    case 'players': return playersFlow(now);
     case 'protest': return protestFlow({ api, match, cycleId: aim });
     case 'throwout': return throwOutFlow({ api, match, cycleId: aim, patch: { selected: null, streakN: 0 }, say: now.say });
     case 'time': return callTime(now);

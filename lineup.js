@@ -11,8 +11,14 @@
 // engine.js imports this file. This file imports engine.js for derive() alone, which swapWindow() calls
 // when it is not handed derive()'s result; neither file calls the other while it loads, so the two
 // importing each other is safe.
+//
+// A buzzer session (SPEC-partB 6, session.js) has 11 places a team instead of 4 seats: 's0' to 's9' for named places and
+// 's10' for Other, who is always seated and always named Other (playersOf marks it `other: true`). A session's move is
+// one marker, { type: 'move', team, seat, player, toSeat, toPlayer, afterCycleId, at }, that empties its old place and
+// fills the new one on the other team at the same boundary. Nothing here changes for a game.
 
 import { derive } from './engine.js';
+import { isSession, OTHER_NAME, OTHER_PLACE, seatCount } from './session.js';
 
 // The swap rules of a record that has none (anything saved before version 2): no windows listed, so a swap
 // never warns. Always a new object, so no caller can change the next one.
@@ -24,10 +30,14 @@ export function defaultSubsRules() {
 export const subsRules = match => ({ ...defaultSubsRules(), ...match.rules?.subs });
 
 const isTeam = team => team === 0 || team === 1;
-const isSeat = seat => Number.isInteger(seat) && seat >= 0 && seat < 4;
+const isSeat = (seat, match) => Number.isInteger(seat) && seat >= 0 && seat < seatCount(match);
+const seatNumbers = match => Array.from({ length: seatCount(match) }, (_, seat) => seat);
 const trimmed = value => (typeof value === 'string' ? value.trim() : '');
 const benchOf = team => (Array.isArray(team?.bench) ? team.bench : []);
 const starterName = (team, seat) => trimmed(team?.seats?.[seat]);
+const isOtherSeat = (match, seat) => isSession(match) && seat === OTHER_PLACE;
+// The name in a seat of team `t`: what the record holds, trimmed; a session's place 10 is always Other.
+const seatName = (match, t, seat) => (isOtherSeat(match, seat) ? OTHER_NAME : starterName(match.teams[t], seat));
 
 // An id's name, trimmed: '' for an unnamed place, an id that is not there, or anything that is not an id.
 export function playerName(match, team, id) {
@@ -35,32 +45,48 @@ export function playerName(match, team, id) {
   const t = match.teams?.[team];
   if (!parsed || !t) return '';
   const place = Number(parsed[2]);
-  if (parsed[1] === 's') return place < 4 ? starterName(t, place) : '';
+  if (parsed[1] === 's') return place < seatCount(match) ? seatName(match, team, place) : '';
   return trimmed(benchOf(t)[place]);
 }
 
 // The players a team can field: its named starters in seat order, then its named bench. `seat` is the
-// starter's own seat, and null for the bench. An unnamed starter seat or bench place is nobody.
+// starter's own seat, and null for the bench. An unnamed starter seat or bench place is nobody. A session's Other
+// (place 10) is one of its players, marked `other: true`.
 export function playersOf(match, team) {
   const t = match.teams[team];
-  const starters = [0, 1, 2, 3].flatMap(seat => (starterName(t, seat) === '' ? [] : [{ id: `s${seat}`, name: starterName(t, seat), seat }]));
+  const starters = seatNumbers(match).flatMap(seat => (seatName(match, team, seat) === '' ? []
+    : [{ id: `s${seat}`, name: seatName(match, team, seat), seat, ...(isOtherSeat(match, seat) ? { other: true } : {}) }]));
   const bench = benchOf(t).flatMap((name, place) => (trimmed(name) === '' ? [] : [{ id: `b${place}`, name: trimmed(name), seat: null }]));
   return [...starters, ...bench];
 }
 
-// The swap markers in marker order, each with the cycle it takes effect from (`boundary`: the index of
+// The seats a marker changes: a swap its one seat; a session's move two, its old place emptied and its new one on the
+// other team filled. Anything else, or a marker that is not well formed, changes none.
+function seatChanges(match, marker) {
+  if (marker.type === 'sub' && isTeam(marker.team) && isSeat(marker.seat, match)) {
+    return [{ team: marker.team, seat: marker.seat, player: typeof marker.player === 'string' ? marker.player : null }];
+  }
+  if (marker.type === 'move' && isSession(match) && isTeam(marker.team) && isSeat(marker.seat, match) && isSeat(marker.toSeat, match)
+    && typeof marker.toPlayer === 'string') {
+    return [{ team: marker.team, seat: marker.seat, player: null }, { team: 1 - marker.team, seat: marker.toSeat, player: marker.toPlayer }];
+  }
+  return [];
+}
+
+// The seat changes in marker order, each with the cycle it takes effect from (`boundary`: the index of
 // the first cycle it reaches). A marker whose cycle is not in the record, or that is not well formed, is left out.
 function swapsOf(match) {
   const position = new Map(match.cycles.map((cycle, index) => [cycle.id, index + 1]));
   return match.markers.flatMap(marker => {
-    if (marker.type !== 'sub' || !isTeam(marker.team) || !isSeat(marker.seat)) return [];
+    const changes = seatChanges(match, marker);
+    if (changes.length === 0) return [];
     const boundary = (marker.afterCycleId ?? null) === null ? 0 : position.get(marker.afterCycleId);
-    return boundary === undefined ? [] : [{ boundary, team: marker.team, seat: marker.seat, player: typeof marker.player === 'string' ? marker.player : null }];
+    return boundary === undefined ? [] : changes.map(change => ({ boundary, ...change }));
   });
 }
 
-// The seats each team starts with: its named starters.
-const startingSeats = match => match.teams.map(team => [0, 1, 2, 3].map(seat => (starterName(team, seat) === '' ? null : `s${seat}`)));
+// The seats each team starts with: its named starters (and a session's Other).
+const startingSeats = match => match.teams.map((_, t) => seatNumbers(match).map(seat => (seatName(match, t, seat) === '' ? null : `s${seat}`)));
 
 // The seats at cycle `index`: the starting seats with every swap that has taken effect by then applied, in marker order.
 const seatsAt = (start, swaps, index) => {
@@ -69,8 +95,8 @@ const seatsAt = (start, swaps, index) => {
   return seats;
 };
 
-// The line-up for the cycle at position `index` (0 is Q1): [team A's four seats, team B's four seats], each
-// an id or null. An index equal to the number of cycles is the next cycle, the one not yet started.
+// The line-up for the cycle at position `index` (0 is Q1): [team A's four seats, team B's four seats] (a session's 11
+// places), each an id or null. An index equal to the number of cycles is the next cycle, the one not yet started.
 export function lineupAt(match, index) {
   return seatsAt(startingSeats(match), swapsOf(match), index);
 }

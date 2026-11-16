@@ -9,6 +9,7 @@
 import { h } from './dom.js';
 import { playersOf, playerName } from './lineup.js';
 import { teamName, leftRight, refusalText } from './view-common.js';
+import { isSession, screenPlaces, playingElsewhere, OTHER_PLACE } from './session.js';
 
 const WINDOW_WORDS = { halftime: 'at halftime', beforeOvertime: 'before overtime', timeout: 'after a timeout', quarter: 'between quarters' };
 const CANCEL = { label: 'Cancel', value: 'cancel' };
@@ -16,10 +17,9 @@ const CANCEL = { label: 'Cancel', value: 'cancel' };
 // The first card's two columns, left team first, each with its seats in screen order (Reverse seat order runs them 4 to 1).
 // `seats` is who sits where now (keys.js sittingNow): [team A's four ids, team B's], null for an empty seat.
 export function outColumns(match, seats) {
-  const order = match.display?.seatOrder === 'desc' ? [3, 2, 1, 0] : [0, 1, 2, 3];
   return leftRight(match).map(team => ({
     team, name: teamName(match, team),
-    seats: order.map(seat => ({ seat, value: `out:${team}:${seat}`, label: `Seat ${seat + 1}: ${playerName(match, team, seats[team][seat]) || 'empty'}` })),
+    seats: screenPlaces(match, team).filter(seat => seat !== OTHER_PLACE).map(seat => ({ seat, value: `out:${team}:${seat}`, label: `${isSession(match) ? 'Place' : 'Seat'} ${seat + 1}: ${playerName(match, team, seats[team][seat]) || 'empty'}` })),
   }));
 }
 
@@ -28,15 +28,17 @@ export function outColumns(match, seats) {
 // already) and someone new.
 export function inChoices(match, team, seat, seats) {
   const here = playerName(match, team, seats[team][seat]);
-  const candidates = playersOf(match, team).filter(p => !seats[team].includes(p.id));
+  const candidates = playersOf(match, team).filter(p => !seats[team].includes(p.id) && p.other !== true && playingElsewhere(match, team, p.id) === null);
   const label = p => (candidates.filter(other => other.name === p.name).length > 1
-    ? `${p.name} (${p.seat === null ? 'bench' : `started in seat ${p.seat + 1}`})` : p.name);
+    ? `${p.name} (${p.seat === null ? 'bench' : `started in ${isSession(match) ? 'place' : 'seat'} ${p.seat + 1}`})` : p.name);
   return {
-    title: `Seat ${seat + 1} (${here || 'empty'}): who comes in?`,
+    title: `${isSession(match) ? 'Place' : 'Seat'} ${seat + 1} (${here || 'empty'}): who comes in?`,
     choices: [
       ...candidates.map(p => ({ label: label(p), value: `player:${p.id}` })),
       { label: 'Leave the seat empty', value: 'empty', disabled: here === '' },
-      { label: 'Someone new', value: 'new' },
+      // A session has Add player in its Players screen, which seats the newcomer in the first empty place; a swap here cannot
+      // name the place, so "Someone new" is not offered there (decision, Task 4).
+      ...(isSession(match) ? [] : [{ label: 'Someone new', value: 'new' }]),
     ],
   };
 }
@@ -84,7 +86,7 @@ export async function swapFlow(c) {
       h('h3', { title: column.name }, column.name), column.seats.map(seat => choiceButton(finish, seat))))),
     buttons: [CANCEL],
   });
-  const picked = /^out:([01]):([0-3])$/.exec(out ?? '');
+  const picked = /^out:([01]):([0-9])$/.exec(out ?? '');
   if (!picked) return;
   const [team, seat] = [Number(picked[1]), Number(picked[2])];
 
@@ -107,7 +109,7 @@ export async function swapFlow(c) {
   } else if (typeof who === 'string' && who.startsWith('player:')) player = who.slice('player:'.length);
   else if (who !== 'empty') return;
 
-  const swap = { type: 'sub', team, seat, player };
+  const swap = { type: 'sub', team, seat, player, ...(isSession(match) ? { confirmed: true } : {}) };   // a session never asks about windows (Tom, 16 Nov)
   const actions = name === undefined ? [swap] : [{ type: 'addBench', team, name }, swap];
   const patch = { selected: null, streakN: 0 };
   let result = api.dispatchAll(actions, patch);

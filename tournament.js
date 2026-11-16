@@ -51,31 +51,33 @@ export function findTeam(tournament, name) {
 
 // MODAQ's rule for a picked team: its first four players in the seats, the rest on the bench. Names are tidied as a name box
 // shows them (spaces round them and line breaks go), so the boxes can be compared with the roster afterwards.
-export function rosterSeats(team) {
+// `size` is the boxes a card has: 4, or 10 in a buzzer session (1.12.0), where the rest are not seated.
+export function rosterSeats(team, size = 4) {
   const players = (team.players ?? []).map(name => String(name ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean);
-  return { seats: [0, 1, 2, 3].map(seat => players[seat] ?? ''), bench: players.slice(4) };
+  return { seats: Array.from({ length: size }, (_, seat) => players[seat] ?? ''), bench: players.slice(size) };
 }
 
 // What picking `team` does to a team card that holds `card` ({ seats, bench }): 'none' when it is the team already filled
 // in; 'fill' at once when every box is empty, or when the boxes still hold exactly the team filled in before (`previous`),
 // so typing "Oxford B" past "Oxford" refills; otherwise 'ask', since names typed by hand are never replaced unasked.
-export function fillPlan(card, team, previous) {
-  const typed = [...card.seats, ...(card.bench ?? [])].map(name => String(name ?? '').trim());
+export function fillPlan(card, team, previous, size = 4) {
+  const seats = Array.from({ length: Math.max(size, card.seats.length) }, (_, i) => card.seats[i] ?? '');
+  const typed = [...seats, ...(card.bench ?? [])].map(name => String(name ?? '').trim());
   if (typed.every(name => name === '')) return 'fill';
   if (previous && previous === team) return 'none';
   if (previous) {
-    const was = rosterSeats(previous);
+    const was = rosterSeats(previous, size);
     const held = [...was.seats, ...was.bench];
-    const now = typed.filter((name, i) => i < 4 || name !== '');
+    const now = typed.filter((name, i) => i < size || name !== '');
     if (now.length === held.length && now.every((name, i) => name === held[i])) return 'fill';
   }
   return 'ask';
 }
 
 // With a tournament file loaded, the round must be a whole number from 1 to 999 before Start, as qbj.js writes it ('' when
-// it is, with no usable file, or for a trivia match, which saves no QBJ file).
-export function roundProblem(round, tournament, rules = null) {
-  if (!tournament?.ok || rules?.trivia) return '';
+// it is, with no usable file, or for a trivia match or a buzzer session, which save no QBJ file).
+export function roundProblem(round, tournament, rules = null, session = false) {
+  if (!tournament?.ok || rules?.trivia || session === true) return '';
   const typed = String(round ?? '').trim();
   return /^\d{1,3}$/.test(typed) && Number(typed) >= 1 ? '' : ROUND_NEEDED;
 }

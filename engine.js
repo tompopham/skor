@@ -10,10 +10,13 @@
 // Protests and thrown-out questions (v2 5) are recorded here (the two lists on each cycle, the actions, the
 // flag and the bonus numbering) and worked out in protests.js, which imports this file for RefusedError, bareSet
 // and cycleIndex, used only inside functions, so the two importing each other is safe in either order.
+// Buzzer sessions (SPEC-partB 6, 1.12.0) live in session.js: the 11 places a team (seatCount), and the move and Add player
+// actions, which this file lists with the swaps. A game has no `session` field, so nothing here changes for one.
 
 import { clockRunning, defaultClockRules } from './clock.js';
 import { defaultSubsRules, inWindow, lineupAt, lineupsOf, playerName, playersOf, subsRules } from './lineup.js';
 import { addProtest, keepsRecord, readBonuses, replacementBounds, replacementMissing, setProtestStatus, throwOut } from './protests.js';
+import { addPlayer, checkSessionSub, isSession, movePlayer, paddedSeats, seatCount, sessionRows, strandedMoveText, strandedArrivalText, strandedBuzzText } from './session.js';
 
 const RESULTS = ['power', 'ten', 'neg', 'wrong'];
 const CORRECT = ['power', 'ten'];
@@ -42,7 +45,9 @@ export class RefusedError extends Error {
 }
 
 const isTeam = team => team === 0 || team === 1;
-const isSeat = seat => Number.isInteger(seat) && seat >= 0 && seat < 4;
+// A seat of the match: 0 to 3 in a game, 0 to 10 in a session (place 10 is Other). With no match, a game's four (jail).
+const isSeat = (seat, match = null) => Number.isInteger(seat) && seat >= 0 && seat < seatCount(match);
+const lastSeat = match => seatCount(match) - 1;
 const isCorrect = buzz => CORRECT.includes(buzz.result);
 const powersOn = rules => rules.tossup.power != null;
 const answered = cycle => cycle.buzzes.some(isCorrect);
@@ -71,10 +76,10 @@ const bounceOn = rules => rules.bonus.bounce != null;
 // A part goes over to the other team only when bounce-backs are on and the controlling team missed it.
 const isOffered = (part, rules) => bounceOn(rules) && part.ctrl === 'missed';
 
-function copyTeam(team = {}) {
+function copyTeam(team = {}, session = false) {
   return {
     name: team.name ?? '',
-    seats: [0, 1, 2, 3].map(seat => team.seats?.[seat] ?? ''),
+    seats: paddedSeats({ session }, team.seats),               // 4 seats, or a session's 11 places with Other in place 10
     captain: team.captain ?? null,
     bench: Array.isArray(team.bench) ? [...team.bench] : [],   // v2 4.1: names; a place's id is 'b' and its position
   };
@@ -88,12 +93,14 @@ const withDefaultRules = rules => ({
   subs: { ...defaultSubsRules(), ...structuredClone(rules.subs) },
 });
 
-export function newMatch({ rules, teams, details = {}, display = {}, id, now }) {
+// `session` true starts a buzzer session (SPEC-partB 6.3), marked `session: true`; a game has no such field.
+export function newMatch({ rules, teams, details = {}, display = {}, id, now, session = false }) {
   return {
     id, createdAt: now, changedAt: now, rev: 0, nextCycleNo: 1,
+    ...(session === true ? { session: true } : {}),
     rules: withDefaultRules(rules),
     details: { competition: '', venue: '', round: '', room: '', reader: '', scorer: '', ...details },   // room: 1.11.0 (SPEC-partB 3.5)
-    teams: [copyTeam(teams?.[0]), copyTeam(teams?.[1])],
+    teams: [copyTeam(teams?.[0], session === true), copyTeam(teams?.[1], session === true)],
     display: { leftTeam: 0, seatOrder: 'asc', ...display },
     cycles: [],
     markers: [],
@@ -184,8 +191,8 @@ function checkTeamTurn(cycle, team, name, format) {
 // from an empty seat, and the trivia formats' own rules. `clue` is the Jackpot clue it answers.
 // Jail and the Double Jump lock rest on earlier cycles: see checkCarried.
 function checkBuzz(match, cycle, { team, seat, result, clue }) {
-  if (!isTeam(team) || !isSeat(seat) || !RESULTS.includes(result)) {
-    throw new RefusedError('bad-action', `a buzz needs team 0 or 1, seat 0 to 3 and a result of ${RESULTS.join(', ')}`);
+  if (!isTeam(team) || !isSeat(seat, match) || !RESULTS.includes(result)) {
+    throw new RefusedError('bad-action', `a buzz needs team 0 or 1, seat 0 to ${lastSeat(match)} and a result of ${RESULTS.join(', ')}`);
   }
   const { name } = match.teams[team];
   checkSeatNamed(match, slotOf(match, cycle), team, seat);
@@ -223,7 +230,7 @@ function checkCarried(match, entry, team, seat) {
 function checkSplitSeats(match, eligible, index) {
   const fits = Array.isArray(eligible) && eligible.length === 2 && eligible.every((seats, team) =>
     Array.isArray(seats) && seats.length >= 1 && seats.length <= 2 && new Set(seats).size === seats.length
-    && seats.every(seat => isSeat(seat) && seatFilled(match, index, team, seat)));
+    && seats.every(seat => isSeat(seat, match) && seatFilled(match, index, team, seat)));
   if (!fits) throw new RefusedError('split-seats', 'a Split needs one or two named seats from each team');
   return eligible.map(seats => [...seats].sort((a, b) => a - b));
 }
@@ -231,8 +238,8 @@ function checkSplitSeats(match, eligible, index) {
 // A Streak turn's refusals; `cycle` is the open cycle, or null.
 function checkStreakTurn(match, cycle, { team, seat, answers, wrong }) {
   if (!cycle || formatOf(cycle, match.rules) !== 'streak') throw new RefusedError('not-a-streak', 'the open question is not a Streak');
-  if (!isTeam(team) || !isSeat(seat) || !Number.isInteger(answers) || answers < 0 || typeof wrong !== 'boolean') {
-    throw new RefusedError('bad-action', 'a Streak turn needs team 0 or 1, seat 0 to 3, a whole number of answers and wrong true or false');
+  if (!isTeam(team) || !isSeat(seat, match) || !Number.isInteger(answers) || answers < 0 || typeof wrong !== 'boolean') {
+    throw new RefusedError('bad-action', `a Streak turn needs team 0 or 1, seat 0 to ${lastSeat(match)}, a whole number of answers and wrong true or false`);
   }
   checkSeatNamed(match, slotOf(match, cycle), team, seat);
   checkTeamTurn(cycle, team, match.teams[team].name, 'streak');
@@ -562,11 +569,13 @@ function callTimeout(match, { team }, open, _entry, phase, now) {
 // Whoever had the seat is off. Refused while a question is open, for a player the team does not have, for
 // one already in a seat (the seat they hold included), and, unless `confirmed`, outside the rules' windows
 // (the refusal carries the rules' `source` and `windows`, for the page to say so). Filling an empty seat
-// never needs confirming (a late arrival joins at the next question, ACF C.12.c).
+// never needs confirming (a late arrival joins at the next question, ACF C.12.c). In a buzzer session no swap needs it
+// (SPEC-partB 6.2, decision 5b), and Other's place is refused (session.js checkSessionSub).
 function sub(match, { team, seat, player, confirmed = false }, open, _entry, phase, now) {
-  if (!isTeam(team) || !isSeat(seat) || typeof confirmed !== 'boolean') {
-    throw new RefusedError('bad-action', 'a swap needs team 0 or 1, seat 0 to 3 and confirmed true or false');
+  if (!isTeam(team) || !isSeat(seat, match) || typeof confirmed !== 'boolean') {
+    throw new RefusedError('bad-action', `a swap needs team 0 or 1, seat 0 to ${lastSeat(match)} and confirmed true or false`);
   }
+  checkSessionSub(match, { team, seat, player });
   if (open.cycleId !== null) throw new RefusedError('question-open', 'finish the open question first');
   const { name } = match.teams[team];
   if (player !== null && !playersOf(match, team).some(p => p.id === player)) {
@@ -577,7 +586,7 @@ function sub(match, { team, seat, player, confirmed = false }, open, _entry, pha
     throw new RefusedError('already-seated', `${playerName(match, team, player)} already sits in seat ${seats.indexOf(player) + 1}`);
   }
   if (player === null && seats[seat] === null) throw new RefusedError('bad-action', `seat ${seat + 1} is already empty`);
-  if (seats[seat] !== null && !confirmed && !inWindow(match, phase)) {
+  if (seats[seat] !== null && !confirmed && !isSession(match) && !inWindow(match, phase)) {
     const { windows, source } = subsRules(match);
     const refusal = new RefusedError('outside-window', `this swap is outside the windows the rules allow (${windows.join(', ') || 'none'}; ${source})`);
     refusal.source = source;
@@ -596,13 +605,14 @@ function addBench(match, { team, name }) {
   side.bench.push(name.trim());
 }
 
-// Delete a swap: `index` into the markers. Every player's questions heard are worked out again from what is left.
+// Delete a swap (or a session's move, both its halves): `index` into the markers. Every player's questions heard are
+// worked out again from what is left.
 // Refused 'already-seated' when the swaps that would be left put a player in two seats of their team in any question
 // (or the next one): a later swap may have depended on this one, as when a player taken off is brought back into
 // another seat. The later swap has to go first (v2 4.2: a player cannot sit in two seats at once).
 function deleteSub(match, { index }) {
   const marker = Number.isInteger(index) ? match.markers[index] : undefined;
-  if (marker?.type !== 'sub') throw new RefusedError('not-a-sub', 'that marker is not a swap');
+  if (marker?.type !== 'sub' && marker?.type !== 'move') throw new RefusedError('not-a-sub', 'that marker is not a swap');
   const left = { ...match, markers: match.markers.filter((_, place) => place !== index) };
   for (const lineup of lineupsOf(left)) {
     for (const team of [0, 1]) {
@@ -614,6 +624,10 @@ function deleteSub(match, { index }) {
       }
     }
   }
+  const stranded = strandedMoveText(left) ?? strandedArrivalText(match, index);   // a session's later move or arrival may rest on this marker (session.js)
+  if (stranded) throw new RefusedError('move-depends', stranded);
+  const buzzLost = strandedBuzzText(match, left);
+  if (buzzLost) throw new RefusedError('buzz-depends', buzzLost);
   match.markers.splice(index, 1);
 }
 
@@ -736,8 +750,8 @@ function replaceCycle(match, { cycleId, cycle }) {
   match.cycles[index] = { ...checkedCycle(match, cycleId, cycle), openedAt, closedAt, protests, thrownOut };
 }
 
-// Delete: a marker on the deleted cycle moves to the cycle before, or goes if there is none. A timeout
-// and a swap are the exceptions: they happened, so they stay, now before the first question.
+// Delete: a marker on the deleted cycle moves to the cycle before, or goes if there is none. A timeout, a swap
+// and a session's move are the exceptions: they happened, so they stay, now before the first question.
 function deleteCycle(match, { cycleId }) {
   const index = cycleIndex(match, cycleId);
   match.cycles.splice(index, 1);
@@ -745,7 +759,7 @@ function deleteCycle(match, { cycleId }) {
   match.markers = match.markers.flatMap(marker => {
     if (marker.afterCycleId !== cycleId) return [marker];
     if (before !== undefined) return [{ ...marker, afterCycleId: before }];
-    return marker.type === 'timeout' || marker.type === 'sub' ? [{ ...marker, afterCycleId: null }] : [];
+    return ['timeout', 'sub', 'move'].includes(marker.type) ? [{ ...marker, afterCycleId: null }] : [];
   });
 }
 
@@ -777,6 +791,7 @@ function checkRules(rules) {
 // score from them. The screen first shows ruleChangeDiff() and asks.
 function setRules(match, { rules }) {
   checkRules(rules);
+  if (isSession(match) && rules.trivia) throw new RefusedError('bad-action', 'a buzzer session cannot use trivia rules (Consensus, GradWrite)');   // SPEC-partB 6.4
   match.rules = structuredClone(rules);
 }
 
@@ -787,7 +802,7 @@ const STARTER_ACTIONS = { buzz, dead, lostTurn, starterType, format: setFormat, 
 const BONUS_ACTIONS = { part, allGot, noneGot, closeBonus, passRest, bonusTotal, bonusNumber };
 const FLOW_ACTIONS = { halftime, timeCalled, endMatch, endQuarter };
 const CLOCK_ACTIONS = { clock: setClock, timeout: callTimeout };
-const LINEUP_ACTIONS = { sub, addBench, deleteSub };
+const LINEUP_ACTIONS = { sub, addBench, deleteSub, move: movePlayer, addPlayer };   // move and addPlayer: sessions only (session.js)
 const PROTEST_ACTIONS = { protest: addProtest, protestStatus: setProtestStatus, throwOut };   // v2 5, untimed like the edits
 const EDIT_ACTIONS = { replaceCycle, deleteCycle, insertCycle, note, setRules };
 const ACTIONS = { ...STARTER_ACTIONS, ...BONUS_ACTIONS, ...FLOW_ACTIONS, ...CLOCK_ACTIONS, ...LINEUP_ACTIONS, ...PROTEST_ACTIONS, ...EDIT_ACTIONS };
@@ -962,6 +977,7 @@ const noJail = () => [[false, false, false, false], [false, false, false, false]
 // one before, so it plays as normal, nobody is jailed and nobody is locked out.
 // Jail is per seat and the seats are the line-up's (v2 4.2, `lineups` from lineupsOf): a seat whose player
 // changed since the cycle before starts out of jail, and "every named seat" is every seat filled in that cycle.
+// Jail is a game's four seats: trivia rules are never a buzzer session (SPEC-partB 6.4).
 function cycleEntries(match, lineups) {
   const { rules } = match;
   const quarterEnds = new Set(match.markers.filter(m => m.type === 'quarter').map(m => m.afterCycleId));
@@ -1234,10 +1250,11 @@ function tallyParts(cycle, rules, own, opponent) {
 // `lineups` is lineupsOf(match). A team's rows are its four starter seats, named or not, as in version 1
 // (ids 's0' to 's3'), then one for each named bench player ('b0'...), whether or not they sat (v2 4.3). A
 // buzz is tallied to whoever sat in that seat in that cycle, and a question heard to everyone who sat in it.
+// A session's rows are its 11 places and its list, then cut to the named players who sat and Other last (session.js sessionRows).
 function statsOf(match, cycles, scores, lineups) {
   const { rules } = match;
   const players = match.teams.map((_, t) => [
-    ...[0, 1, 2, 3].map(seat => blankPlayer(`s${seat}`, playerName(match, t, `s${seat}`), seat)),
+    ...Array.from({ length: seatCount(match) }, (_, seat) => blankPlayer(`s${seat}`, playerName(match, t, `s${seat}`), seat)),
     ...playersOf(match, t).filter(p => p.seat === null).map(p => blankPlayer(p.id, p.name, null)),
   ]);
   const byId = players.map(rows => new Map(rows.map(row => [row.id, row])));
@@ -1273,7 +1290,7 @@ function statsOf(match, cycles, scores, lineups) {
     team.bounce.conversion = ratio(team.bounce.partsGot, team.bounce.partsHeard);
     team.powersPerNeg = team.negs === 0 ? null : team.powers / team.negs;
   });
-  return { players, teams };
+  return { players: isSession(match) ? players.map((rows, t) => sessionRows(rows, t, lineups)) : players, teams };
 }
 
 // Whether a team may still answer: not kept out by jail or the Double Jump lock, with a turn left
