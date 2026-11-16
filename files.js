@@ -355,7 +355,7 @@ tr.thrown td { color: #444; text-decoration: line-through; }
 }
 `;
 
-const DETAIL_LABELS = [['competition', 'Competition'], ['round', 'Round'], ['venue', 'Venue'], ['reader', 'Reader'], ['scorer', 'Scorer']];
+const DETAIL_LABELS = [['competition', 'Competition'], ['round', 'Round'], ['room', 'Room'], ['venue', 'Venue'], ['reader', 'Reader'], ['scorer', 'Scorer']];
 
 function detailsLine(match) {
   const parts = DETAIL_LABELS.map(([key, label]) => [label, String(match.details?.[key] ?? '').trim()])

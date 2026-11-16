@@ -6,9 +6,12 @@
 // Print or save button; where the question grid is wider than the window it shows as a list built from the same match
 // (files.js sheetRows), while print and the saved file keep the grid; and after the editor the edited row is brought back.
 // From 1.7.0 (SPEC-partB 1.2): Send match is the sixth file action, and Past matches tags a copy a sent match replaced.
+// From 1.11.0 (SPEC-partB 3.2): Save QBJ file is the seventh (view-qbj.js); a trivia match has a line in its place.
 
 import { derive } from './engine.js';
 import { toScoresheetHTML, toCSV, resultLine, fileName, offerFile, sheetRows } from './files.js';
+import { canSaveQbj, QBJ_TRIVIA } from './qbj.js';
+import { qbjDialog } from './view-qbj.js';
 import { listMatchesReport, loadMatch, getCurrent } from './storage.js';
 import { h } from './dom.js';
 import { ensureStyles, refusalText, isLive, fmt } from './view-common.js';
@@ -236,7 +239,7 @@ function rowAt(index) {
   return rows[Math.min(index, rows.length - 1)]?.querySelector('.rowbtn') ?? null;
 }
 
-// The six file actions, behind Print or save (review change 6). Each runs inside its own button's click, so iPhone Safari
+// The seven file actions, behind Print or save (review change 6). Each runs inside its own button's click, so iPhone Safari
 // still lets it share, download or copy; the dialog closes first. What happened is said in the line under the heading.
 function fileActions(state, api, say) {
   const report = (file, result) => {
@@ -288,15 +291,19 @@ function fileActions(state, api, say) {
     ['backup', 'Save backup', saveBackup],
     ['copy', 'Copy result line', copyLine],
     ['send', 'Send match', () => api.sendMatch()],
+    // Added last, so no earlier button moves. A trivia match gets the reason in its place, not a button.
+    canSaveQbj(state.match) ? ['qbj', 'Save QBJ file', () => qbjDialog(state, api)] : ['qbj', QBJ_TRIVIA, null],
   ];
 }
 
 function filesDialog(actions, api) {
   return api.ask({
     title: 'Print or save',
-    body: finish => h('div', { class: 'stack', id: 'files-choices' }, actions.map(([value, label, act]) => h('button', {
-      type: 'button', class: 'btn', id: `file-${value}`, 'data-value': value, onclick: () => { finish(value); act(); },
-    }, label))),
+    body: finish => h('div', { class: 'stack', id: 'files-choices' }, actions.map(([value, label, act]) => (act === null
+      ? h('p', { class: 'hint', id: `file-${value}-none` }, label)
+      : h('button', {
+        type: 'button', class: 'btn', id: `file-${value}`, 'data-value': value, onclick: () => { finish(value); act(); },
+      }, label)))),
     buttons: [{ label: 'Close', value: 'cancel' }],
   });
 }

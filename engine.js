@@ -92,7 +92,7 @@ export function newMatch({ rules, teams, details = {}, display = {}, id, now }) 
   return {
     id, createdAt: now, changedAt: now, rev: 0, nextCycleNo: 1,
     rules: withDefaultRules(rules),
-    details: { competition: '', venue: '', round: '', reader: '', scorer: '', ...details },
+    details: { competition: '', venue: '', round: '', room: '', reader: '', scorer: '', ...details },   // room: 1.11.0 (SPEC-partB 3.5)
     teams: [copyTeam(teams?.[0]), copyTeam(teams?.[1])],
     display: { leftTeam: 0, seatOrder: 'asc', ...display },
     cycles: [],

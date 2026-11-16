@@ -16,6 +16,7 @@ export const KEYS = {
   roster: 'scorer.roster',
   settings: 'scorer.settings',
   ratings: 'scorer.ratings',      // win percentage's ratings file (SPEC-partB 0.3 and 2.1), as its text
+  tournament: 'scorer.tournament',   // the tournament file loaded on Setup (SPEC-partB 0.3 and 3.4), as its text
 };
 const MATCH_PREFIX = 'scorer.match.';
 export const matchKey = id => `${MATCH_PREFIX}${id}`;
@@ -246,6 +247,19 @@ export function loadRatingsText(store = defaultStore()) {
 
 export const saveRatingsText = (text, store = defaultStore()) => attempt(() => store.setItem(KEYS.ratings, String(text)));
 export const removeRatingsText = (store = defaultStore()) => attempt(() => store.removeItem(KEYS.ratings));
+
+// The tournament file's text, or null (none saved, or the store cannot be read). tournament.js reads and checks it.
+export function loadTournamentText(store = defaultStore()) {
+  try {
+    const text = store.getItem(KEYS.tournament);
+    return typeof text === 'string' ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+export const saveTournamentText = (text, store = defaultStore()) => attempt(() => store.setItem(KEYS.tournament, String(text)));
+export const removeTournamentText = (store = defaultStore()) => attempt(() => store.removeItem(KEYS.tournament));
 
 // ---- Backup files ---------------------------------------------------------------------------
 

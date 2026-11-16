@@ -143,6 +143,7 @@ export function ratingMarks() {
   const refresh = () => {
     const shared = new Map();
     for (const { input, slot } of boxes) {
+      if (!input.isConnected) continue;   // a bench row the tournament picker replaced (1.11.0)
       const found = lookUp(ratings, input.value);
       slot.textContent = found.status === 'unrated' || found.status === 'shared' ? 'not rated' : '';
       if (found.status === 'shared') shared.set(input.value.trim(), found.count);
