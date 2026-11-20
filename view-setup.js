@@ -440,6 +440,10 @@ export function renderSetup(root, state, api) {
   }
 
   const start = h('button', { type: 'button', class: 'btn primary', id: 'start-match', onclick: startFromDraft }, 'Start match');
+  // Forget names sits under the hint on a phone. From 640 px it sits beside Start in its bar (Start is at most 480 px wide), since New
+  // match fills Tom's 756 x 470 window exactly and a row of its own would make the page scroll (measured 20/11/2026: 493 px in 470).
+  const wide = globalThis.matchMedia?.('(min-width: 640px)').matches ?? false;
+  const forget = forgetRow(api, now, redraw);
   // The phone keyboard's Enter key says Next in every name box but the last, where it says Done.
   const keyLabels = () => form.querySelectorAll('.tcard input').forEach(box => box.setAttribute('enterkeyhint', nextBox(draft, box.id) === null ? 'done' : 'next'));
   const form = h('form', { novalidate: true, autocomplete: 'off' },
@@ -448,11 +452,11 @@ export function renderSetup(root, state, api) {
     tournamentStatus(now),
     h('div', { class: 'grid2 tcards' }, teamCard(draft, 0, rosterId, () => keyLabels(), now), teamCard(draft, 1, rosterId, () => keyLabels(), now)),
     detailsSection,
-    h('div', { class: 'startbar' }, startMsg, start),
+    h('div', { class: wide ? 'startbar withforget' : 'startbar' }, startMsg, start, wide ? forget : null),
     h('p', { class: 'hint', id: 'setup-hint' }, sessionOn(draft)
       ? 'Names are saved on this device for next time. A team may start with no names: everyone is then on Other, which is always there.'
       : 'Names are saved on this device for next time. A team with no names gets seats A1 to A4 (B1 to B4).'),
-    forgetRow(api, now, redraw));
+    wide ? null : forget);
 
   // Only the Start button starts a match. The form never submits, so Enter or a phone keyboard's
   // Go key in a rule or details box does nothing, and a half-typed form cannot start by accident. In a name box Enter moves to
