@@ -207,6 +207,7 @@ details.fold.shut:not([open]) { display: none; }
 /* A box brought into view (Tab, the phone's next-field arrow) stops above the Start bar, not under it. */
 #app[data-screen="setup"] form :is(input, select, button, summary) { scroll-margin-bottom: 80px; }
 #setup-hint { margin: 0 0 4px; }
+.forgetrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
 /* One line from 640 px, cut short rather than wrapped, so a scroll bar's 15 px cannot push the page past Tom's window. */
 @media (min-width: 640px) { #setup-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } }
 @media (pointer: coarse) {

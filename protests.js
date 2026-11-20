@@ -1,5 +1,6 @@
 // Protests and thrown-out questions (v2 5.1, 5.2). The record holds only facts: on each cycle,
-// `protests` ({ team, player, part, points, status, text, at }) and `thrownOut` ({ part, at, note, keepTeam,
+// `protests` ({ team, player, part, points, status, text, givenAnswer?, answerLine?, at }; the two answers from 1.13.0, kept
+// only when typed, so a protest without them is the record 1.12.0 made) and `thrownOut` ({ part, at, note, keepTeam,
 // badPart, original }). A protest never changes a score (v2 1.4): the scorer fixes the question with Edit, and
 // nothing here works out whether a protest matters. A throw-out moves what was entered into `original` and
 // blanks the cycle for the replacement, which is scored on the same line.
@@ -28,11 +29,13 @@ const isTeam = team => team === 0 || team === 1;
 
 // A protest as the record keeps it, without its time. The team is 0 or 1, the player null or a line-up id of one of
 // that team's named players, the part 'tossup' or a bonus part number the rules' sets have, the points a whole
-// number from 0 up. A missing status reads 'open', a missing text '' and a missing player null.
+// number from 0 up. A missing status reads 'open', a missing text '' and a missing player null. The answer given and
+// the answer line (1.13.0, both optional: ACF H.3 and NAQT J.9 ask only that a protest explain itself) must be text, and
+// are kept only when they hold more than spaces.
 function checkedProtest(match, given) {
   const bad = detail => new RefusedError('bad-protest', detail);
   if (!isObject(given)) throw bad('a protest needs a team, a part and the points at stake');
-  const { team, player = null, part, points, status = 'open', text = '' } = given;
+  const { team, player = null, part, points, status = 'open', text = '', givenAnswer = '', answerLine = '' } = given;
   if (!isTeam(team)) throw bad('a protest is made by team 0 or 1');
   if (player !== null && !playersOf(match, team).some(p => p.id === player)) throw bad(`${match.teams[team].name} has no player ${String(player)}`);
   const parts = match.rules.bonus.parts;
@@ -40,8 +43,17 @@ function checkedProtest(match, given) {
   if (!Number.isInteger(points) || points < 0) throw bad('the points at stake must be a whole number, 0 or more');
   if (!PROTEST_STATUSES.includes(status)) throw bad(`a protest is ${PROTEST_STATUSES.join(', ')}`);
   if (typeof text !== 'string') throw bad('the text of a protest must be text');
-  return { team, player, part, points, status, text };
+  if (typeof givenAnswer !== 'string' || typeof answerLine !== 'string') throw bad('the answer given and the answer line must be text');
+  return {
+    team, player, part, points, status, text,
+    ...(givenAnswer.trim() === '' ? {} : { givenAnswer }), ...(answerLine.trim() === '' ? {} : { answerLine }),
+  };
 }
+
+// A protest's answer given, answer line and explanation as the screens and files print them: trimmed, '' when missing
+// (a protest from before 1.13.0 has no answers).
+const typed = value => (typeof value === 'string' ? value.trim() : '');
+export const protestWords = given => ({ answer: typed(given.givenAnswer), line: typed(given.answerLine), explanation: typed(given.text) });
 
 // Adds a protest to any cycle, stamped with the time of the entry.
 export function addProtest(match, { cycleId, protest }, _open, _entry, _phase, now) {
@@ -141,7 +153,8 @@ export const readBonuses = cycle => (cycle.thrownOut ?? []).flatMap(({ part, ori
 // ---- Copy for Discord -----------------------------------------------------------------------
 
 // The block one protest puts on the clipboard (v2 5.1): the competition and round, the teams (the left team
-// first), the question, who protested and why, the points at stake, the status and the score after that question.
+// first), the question, who protested, the answer given, the answer line and the explanation (each only when typed; the
+// explanation was "Reason:" until 1.13.0), the points at stake, the status and the score after that question.
 // Names go in as typed (a blank team name reads "Team A" or "Team B", as everywhere on the page). '' when the
 // cycle or the protest is not there.
 export function protestText(match, derived, cycleId, index) {
@@ -155,13 +168,15 @@ export function protestText(match, derived, cycleId, index) {
     ? `Q${cycle.number} tossup`
     : `Q${cycle.number} bonus${cycle.bonusNumber === null ? '' : ` ${cycle.bonusNumber}`}, part ${given.part}`;
   const who = playerName(match, given.team, given.player);
-  const reason = typeof given.text === 'string' ? given.text.trim() : '';
+  const { answer, line, explanation } = protestWords(given);
   return [
     heading,
     `${name(left)} v ${name(right)}`,
     question,
     `Protest by ${name(given.team)}${who === '' ? '' : ` (${who})`}`,
-    reason === '' ? '' : `Reason: ${reason}`,
+    answer === '' ? '' : `Answer given: ${answer}`,
+    line === '' ? '' : `Answer line: ${line}`,
+    explanation === '' ? '' : `Explanation: ${explanation}`,
     `Points at stake: ${given.points}`,
     `Status: ${STATUS_WORDS[given.status] ?? given.status}`,
     `Score after Q${cycle.number}: ${name(left)} ${fmt(cycle.running[left])}, ${name(right)} ${fmt(cycle.running[right])}`,

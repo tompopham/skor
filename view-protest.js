@@ -12,7 +12,7 @@
 import { derive } from './engine.js';
 import { h } from './dom.js';
 import { lineupAt, lineupsOf, playersOf, playerName } from './lineup.js';
-import { PROTEST_STATUSES, STATUS_WORDS, protestText } from './protests.js';
+import { PROTEST_STATUSES, STATUS_WORDS, protestText, protestWords } from './protests.js';
 import { copyText, ensureStyles, field, leftRight, refusalText, teamName } from './view-common.js';
 
 // ---- Words ------------------------------------------------------------------------------------
@@ -36,18 +36,24 @@ export const boundsWords = bounds => (bounds ? `Replacement bonus: floor ${bound
 export const allProtests = match => match.cycles.flatMap(cycle => (cycle.protests ?? []).map((protest, index) => ({ cycleId: cycle.id, index, protest })));
 
 // A protest's line (Task 7 ruling 5): "Q14 tossup: Team A (Smith), 10 points at stake. Open. The reason", with " (Smith)" left out
-// when no player is named and the reason when there is none. [] when the cycle or the protest is not there.
+// when no player is named and the reason when there is none. From 1.13.0 a protest with an answer given or an answer line adds
+// "Answer given: X." and "Answer line: Y." after the status, and its reason is then labelled "Explanation: ", so it cannot be read as
+// part of the answer line; a protest with neither (every one saved before 1.13.0) prints exactly as before. [] when the cycle or
+// the protest is not there.
 export function protestPieces(match, d, cycleId, index) {
   const dc = d.cycles.find(c => c.id === cycleId);
   const given = match.cycles.find(c => c.id === cycleId)?.protests?.[index];
   if (!dc || !given) return [];
   const who = playerName(match, given.team, given.player);
-  const reason = typeof given.text === 'string' ? given.text.trim() : '';
+  const { answer, line, explanation } = protestWords(given);
+  const answered = answer !== '' || line !== '';
   return [
     ['text', `${questionWords(dc, given.part)}: `], ['name', teamName(match, given.team)],
     ...(who === '' ? [] : [['text', ' ('], ['name', who], ['text', ')']]),
     ['text', `, ${given.points} ${given.points === 1 ? 'point' : 'points'} at stake. ${STATUS_WORDS[given.status] ?? given.status}.`],
-    ...(reason === '' ? [] : [['text', ' '], ['name', reason]]),
+    ...(answer === '' ? [] : [['text', ' Answer given: '], ['name', answer], ['text', '.']]),
+    ...(line === '' ? [] : [['text', ' Answer line: '], ['name', line], ['text', '.']]),
+    ...(explanation === '' ? [] : [['text', answered ? ' Explanation: ' : ' '], ['name', explanation]]),
   ];
 }
 export const protestLine = (match, d, cycleId, index) => plain(protestPieces(match, d, cycleId, index));
@@ -171,9 +177,17 @@ export async function protestFlow({ api, match, cycleId }) {
   const who = h('select', { 'aria-label': 'Who protested' }, h('option', { value: '' }, 'No player named'),
     whoCanProtest(match, index, team).map(([id, name]) => h('option', { value: id }, name)));
   const points = h('input', { type: 'number', inputmode: 'numeric', step: '1', min: '0', autocomplete: 'off', 'aria-label': 'Points at stake' });
-  const says = h('textarea', { rows: 3, maxlength: 500, 'aria-label': 'What the protest says' });
+  // The answer given and the answer line (1.13.0), both optional. No autocorrect or spellcheck: the box must keep the answer as it
+  // was said, not as the phone would spell it. Return moves to the next box (data-enter, app.js's ask), where in Points it records.
+  const answerBox = (id, label) => h('input', {
+    type: 'text', id, maxlength: 200, autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'next', 'data-enter': 'next', 'aria-label': label,
+  });
+  const answer = answerBox('protest-answer', 'Answer given');
+  const answerLine = answerBox('protest-answer-line', 'Answer line');
+  const says = h('textarea', { rows: 3, maxlength: 500, id: 'protest-explanation', 'aria-label': 'Explanation' });
   const note = h('p', { class: 'msg' });
-  const body = h('div', { class: 'protestform' }, field('Who protested', who), field('Points at stake', points), field('What the protest says', says), note);
+  const body = h('div', { class: 'protestform' }, field('Who protested', who), field('Points at stake', points),
+    field('Answer given (optional)', answer), field('Answer line (optional)', answerLine), field('Explanation (optional)', says), note);
   for (;;) {
     const choice = await api.ask({
       title: `Protest on ${questionWords(dc, part)}: ${teamName(match, team)}`, body, first: true,   // above the boxes, clear of an iPhone's keyboard
@@ -184,7 +198,11 @@ export async function protestFlow({ api, match, cycleId }) {
     const number = Number(raw);
     if (raw === '' || !Number.isInteger(number)) { note.textContent = 'Type a whole number.'; continue; }
     if (number < 0) { note.textContent = 'Type a whole number from 0 up.'; continue; }
-    const result = api.dispatch({ type: 'protest', cycleId, protest: { team, player: who.value === '' ? null : who.value, part, points: number, text: says.value.trim() } }, {});
+    const protest = {
+      team, player: who.value === '' ? null : who.value, part, points: number, text: says.value.trim(),
+      givenAnswer: answer.value.trim(), answerLine: answerLine.value.trim(),
+    };
+    const result = api.dispatch({ type: 'protest', cycleId, protest }, {});
     if (result.ok) return true;
     note.textContent = refusalText(result.error);
   }

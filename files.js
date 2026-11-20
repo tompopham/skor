@@ -16,7 +16,7 @@ import { timeSummary, formatLength } from './clock.js';
 import { leftRight, repeatText } from './view-common.js';
 import { lineupAt, lineupsOf, playerName as nameOf } from './lineup.js';
 import { isSession, seatCount } from './session.js';
-import { STATUS_WORDS } from './protests.js';
+import { STATUS_WORDS, protestWords } from './protests.js';
 import { allProtests, protestPieces, questionWords, thrownOutLines } from './view-protest.js';
 
 const DASH = '–';
@@ -334,12 +334,16 @@ export function toCSV(match, d) {
     lines.push('');
     for (const line of thrown) lines.push(csvRow([`Q${line.number}`, line.text]));
   }
+  // The protests: with no answer given or answer line on any of them (every match saved before 1.13.0), the block 1.12.0 wrote,
+  // its last column "Text"; with one on any, every row has Answer given and Answer line before the text, now "Explanation".
   const protests = allProtests(match);
   if (protests.length > 0) {
-    lines.push('', csvRow(['Protest on', 'Team', 'Player', 'Points at stake', 'Status', 'Text']));
+    const answered = protests.some(({ protest }) => protestWords(protest).answer !== '' || protestWords(protest).line !== '');
+    lines.push('', csvRow(['Protest on', 'Team', 'Player', 'Points at stake', 'Status', ...(answered ? ['Answer given', 'Answer line', 'Explanation'] : ['Text'])]));
     for (const { cycleId, protest } of protests) {
+      const { answer, line } = protestWords(protest);
       lines.push(csvRow([questionWords(d.cycles.find(c => c.id === cycleId), protest.part), teamName(match, protest.team), nameOf(match, protest.team, protest.player),
-        protest.points, STATUS_WORDS[protest.status] ?? protest.status, protest.text ?? '']));
+        protest.points, STATUS_WORDS[protest.status] ?? protest.status, ...(answered ? [answer, line] : []), protest.text ?? '']));
     }
   }
   lines.push('', csvRow(['Player', 'Team', 'Seat', ...PLAYER_COLUMNS.map(c => c.header)]));

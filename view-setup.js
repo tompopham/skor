@@ -18,7 +18,7 @@
 
 import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset, presetUnverified } from './presets.js';
 import { newMatch } from './engine.js';
-import { loadRoster, saveRoster } from './storage.js';
+import { forgetRoster, loadRoster, saveRoster } from './storage.js';
 import { h, newId } from './dom.js';
 import { renderRulesScreen, rulesDiffer } from './view-rules.js';
 import { ratingMarks } from './view-win.js';
@@ -339,6 +339,32 @@ export function sessionTeamsFromDraft(draft) {
   return draft.teams.map((team, t) => ({ name: team.name.trim() || `Team ${SIDE[t]}`, seats: sessionSeats(team), bench: [], captain: null }));
 }
 
+// Forget names (1.13.0; Tom's choices 20/11/2026: on New match, and the tournament file kept). The saved list holds every name of
+// every match started on this device, newest first, so a practice's names need not stay on the scorer's laptop. The button counts
+// them; the box that asks first says what stays.
+export const forgetLabel = count => (count === 0 ? 'No saved names' : `Forget saved names (${count})`);
+export const forgetBody = (count, tournament) => `This device stops offering the ${count} ${count === 1 ? 'name' : 'names'} saved for the name boxes. `
+  + `Saved matches keep their names${tournament ? ', and the tournament file stays (Match details, Remove)' : ''}. The names of your next match are saved again.`;
+
+function forgetRow(api, now, redraw) {
+  const count = loadRoster().length;
+  const msg = h('span', { class: 'msg', id: 'forget-msg', role: 'status', hidden: true });
+  const button = h('button', { type: 'button', class: 'btn small', id: 'forget-names', disabled: count === 0 }, forgetLabel(count));
+  button.addEventListener('click', async () => {
+    const choice = await api.ask({
+      title: 'Forget saved names?', body: forgetBody(count, Boolean(now.tournament || now.error)),
+      buttons: [{ label: 'Forget names', value: 'forget', primary: true }, { label: 'Cancel', value: 'cancel' }],
+    });
+    if (choice !== 'forget') return;
+    const result = forgetRoster();
+    if (result.ok) {
+      redraw();
+      document.getElementById('team0-name')?.focus({ preventScroll: true });   // the button is drawn again (greyed): focus stays on the form
+    } else Object.assign(msg, { hidden: false, textContent: `The names could not be forgotten: ${result.error}` });
+  });
+  return h('div', { class: 'forgetrow', id: 'forget-row' }, button, msg);
+}
+
 export function renderSetup(root, state, api) {
   if (!state.ui.setup) api.setUi({ setup: freshDraft() }, false);
   const draft = state.ui.setup;
@@ -425,7 +451,8 @@ export function renderSetup(root, state, api) {
     h('div', { class: 'startbar' }, startMsg, start),
     h('p', { class: 'hint', id: 'setup-hint' }, sessionOn(draft)
       ? 'Names are saved on this device for next time. A team may start with no names: everyone is then on Other, which is always there.'
-      : 'Names are saved on this device for next time. A team with no names gets seats A1 to A4 (B1 to B4).'));
+      : 'Names are saved on this device for next time. A team with no names gets seats A1 to A4 (B1 to B4).'),
+    forgetRow(api, now, redraw));
 
   // Only the Start button starts a match. The form never submits, so Enter or a phone keyboard's
   // Go key in a rule or details box does nothing, and a half-typed form cannot start by accident. In a name box Enter moves to
@@ -449,5 +476,5 @@ export function renderSetup(root, state, api) {
   root.append(
     h('div', { class: 'top setuptop' }, h('h1', { tabindex: '-1' }, 'New match'),
       h('div', { class: 'fmt' }, format, rulesButton, detailsButton), h('div', { class: 'acts' }, back)),
-    form, roster, teamList(now));
+    form, roster, ...[teamList(now)].filter(Boolean));   // no tournament file: no team list (append would write "null", 1.11.0 to 1.12.0)
 }

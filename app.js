@@ -704,6 +704,15 @@ function ask({ title, body = [], buttons = [], head = false, back = null, menu =
         event.preventDefault();
         event.stopPropagation();
         finish('cancel');
+      } else if (event.key === 'Enter' && event.target instanceof HTMLInputElement && event.target.dataset.enter === 'next') {
+        // A box marked data-enter="next" (the protest form's answer boxes, 1.13.0) moves on to the next box, so Return after the
+        // answer given does not record the protest before the answer line and explanation are typed. A key that ends a composition
+        // (an accent, a Japanese or Chinese candidate) is left alone, as on Setup.
+        if (event.isComposing || event.keyCode === 229) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const items = [...dialog.querySelectorAll(FIELDS)];
+        items[items.indexOf(event.target) + 1]?.focus();
       } else if (event.key === 'Enter' && event.target instanceof HTMLInputElement && event.target.type !== 'checkbox') {
         event.preventDefault();
         event.stopPropagation();

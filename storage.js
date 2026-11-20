@@ -214,6 +214,11 @@ export function loadRoster(store = defaultStore()) {
   return Array.isArray(names) ? names.filter(name => typeof name === 'string') : [];
 }
 
+// Forget names (1.13.0): removes the saved name list, and nothing else (matches, settings, the ratings and tournament files stay).
+export function forgetRoster(store = defaultStore()) {
+  return attempt(() => store.removeItem(KEYS.roster));
+}
+
 // Keeps each name once, trimmed, and drops anything that is not a name.
 export function saveRoster(names, store = defaultStore()) {
   return attempt(() => {

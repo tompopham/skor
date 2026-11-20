@@ -1,11 +1,11 @@
 // QBJ export (Skor 1.11.0, SPEC-partB section 3; Tom, 5 Nov 2026, decisions 5 and 12, Q1): one bare QB Schema Match per
-// game, in the shape MODAQ exports, which YellowFruit 4 imports (File, QBJ Schema, Import Games Only), quizbowlbuzzpoints.com
+// game, in the shape MODAQ exports, which YellowFruit 4 imports (File, QBJ Schema, Import Games Only), buzzpoints.org
 // takes as an upload, and NAQT gets inside the TD's YellowFruit file. Pure functions of the match record and derive()'s
 // result, so the tests run them in Node; the scoresheet's Save QBJ file hands the text to offerFile.
 //
 // What each reader needs (SPEC-partB 3.1, checked on their code): snake_case keys only, since YellowFruit wipes camelCase
 // ones (its own YfData aside); exactly two teams, the left team first; every named player, with tossups heard and
-// answer_counts (an empty list when none, which quizbowlbuzzpoints.com reads as "this line-up is complete"); bonus_points,
+// answer_counts (an empty list when none, which buzzpoints.org reads as "this line-up is complete"); bonus_points,
 // never points; one match_questions entry per tossup read, dead ones too, with each buzz's points as Skor scored them (a
 // wrong answer after the end is 0: the site does not re-score); overtime counted apart, since YellowFruit refuses 21
 // tossups in a 20-tossup game otherwise; _round as a number. Lineups carry the `reason` the schema requires (MODAQ leaves
@@ -15,6 +15,7 @@ import { derive } from './engine.js';
 import { lineupsOf, playerName, playersOf } from './lineup.js';
 import { leftRight, teamName } from './view-common.js';
 import { isSession } from './session.js';
+import { protestWords } from './protests.js';
 
 export const QBJ_TRIVIA = 'QBJ files cannot hold trivia formats';
 
@@ -62,7 +63,7 @@ export function toQbj(match, d = derive(match)) {
   const counted = d.cycles.map((dc, index) => ({ dc, index, cycle: match.cycles[index] })).filter(({ dc }) => !dc.flags.includes('after-end'));
 
   // Every named player of each team, as MODAQ lists them (starters by seat, then the bench), with one who never sat at 0
-  // tossups heard and no answers. quizbowlbuzzpoints.com needs that: it takes a game's list as complete only when some
+  // tossups heard and no answers. buzzpoints.org needs that: it takes a game's list as complete only when some
   // listed player has no answer (aggregate.ts line 1396), and otherwise credits a teammate missing from the list with the
   // whole game. YellowFruit's sum is unchanged by it while four sit (it expects min(players listed, 4) x tossups read).
   // A buzz from a seat with nobody named in it (a name cleared after the buzz) is the seat's starter, as on the scoresheet.
@@ -82,6 +83,7 @@ export function toQbj(match, d = derive(match)) {
   let thrownSoFar = 0;
   const notes = [];
   const statusLines = [];
+  const answerLines = [];
   const cycleNotes = [];
   const answers = [0, 1].map(() => new Map());   // per team: id -> Map(value -> count)
   const overtimeBuzzes = [new Map(), new Map()];
@@ -146,6 +148,13 @@ export function toQbj(match, d = derive(match)) {
     for (const p of [...protests.filter(p => p.part === 'tossup'), ...protests.filter(p => p.part !== 'tossup')]) {
       statusLines.push(`Protest status: Q${dc.number} ${p.part === 'tossup' ? 'tossup' : `bonus part ${p.part}`}, ${STATUS[p.status] ?? 'open'}.`);
     }
+    // The answer given and the answer line (1.13.0), on a line of Skor's own after the status lines: MODAQ's note above uses the
+    // reason only (its QBJ.ts), so it is kept word for word. Only for a protest with either typed.
+    for (const p of [...protests.filter(p => p.part === 'tossup'), ...protests.filter(p => p.part !== 'tossup')]) {
+      const { answer, line } = protestWords(p);   // text only, as the sheet and CSV read it: a hand-edited non-text value is blank
+      const answers = [answer && `answer given "${oneLine(answer)}"`, line && `answer line "${oneLine(line)}"`].filter(Boolean);
+      if (answers.length > 0) answerLines.push(`Protest answers: Q${dc.number} ${p.part === 'tossup' ? 'tossup' : `bonus part ${p.part}`}, ${answers.join(', ')}.`);
+    }
     for (const t of cycle.thrownOut ?? []) {
       if (oneLine(t.note)) cycleNotes.push(`Q${dc.number} ${t.part === 'tossup' ? 'tossup' : 'bonus'} thrown out: ${oneLine(t.note)}`);
     }
@@ -185,7 +194,7 @@ export function toQbj(match, d = derive(match)) {
   if (detail('room')) qbj.location = detail('room');
   if (detail('reader')) qbj.moderator = detail('reader');
   if (detail('scorer')) qbj.scorekeeper = detail('scorer');
-  const allNotes = [...notes, ...statusLines, ...cycleNotes];
+  const allNotes = [...notes, ...statusLines, ...answerLines, ...cycleNotes];
   if (allNotes.length > 0) qbj.notes = allNotes.join('\n');
   return qbj;
 }
@@ -205,7 +214,7 @@ const clean = (text, limit) => edges(Array.from(edges(String(text ?? '').replace
 // "R03 Room2 Edinburgh A v Oxford B.qbj": the round as two digits, the room with its spaces taken out (a room typed as a
 // bare number is "Room4"), then the teams, the left one first. With no round the day the match started goes after the
 // teams in brackets ("Edinburgh A v Oxford B (2026-11-07).qbj"), so two practice games between the same teams do not
-// share a name, and quizbowlbuzzpoints.com, which takes a file's round from the first number followed by a space, _ or .,
+// share a name, and buzzpoints.org, which takes a file's round from the first number followed by a space, _ or .,
 // does not read the day as the round. At most 120 characters and 240 bytes (file systems allow 255).
 export function qbjFileName(match) {
   const round = qbjRound(match);

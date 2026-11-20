@@ -7,9 +7,9 @@ import { offerFile } from './files.js';
 import { h } from './dom.js';
 import { qbjText, qbjFileName, qbjRound } from './qbj.js';
 
-export const QBJ_USE = 'For YellowFruit (File, QBJ Schema, Import Games Only) and quizbowlbuzzpoints.com.';
-export const QBJ_TWICE = 'quizbowlbuzzpoints.com counts every game uploaded, so one uploaded twice counts twice: delete the old upload first.';
-export const QBJ_NO_ROUND = 'No round was typed, so the file has none inside. YellowFruit takes it only from the round’s own Import button (Games, the round); quizbowlbuzzpoints.com reads the first number in the file name as the round, so put the round at the start, as R03.';
+export const QBJ_USE = 'For YellowFruit (File, QBJ Schema, Import Games Only) and buzzpoints.org.';
+export const QBJ_TWICE = 'buzzpoints.org counts every game uploaded, so one uploaded twice counts twice: delete the old upload first.';
+export const QBJ_NO_ROUND = 'No round was typed, so the file has none inside. YellowFruit takes it only from the round’s own Import button (Games, the round); buzzpoints.org reads the first number in the file name as the round, so put the round at the start, as R03.';
 
 // The dialog's lines for a match, for the page and the tests: whether it has ended, the file name, and the round note.
 export function qbjWords(match, d = derive(match)) {
