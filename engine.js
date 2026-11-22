@@ -12,11 +12,15 @@
 // and cycleIndex, used only inside functions, so the two importing each other is safe in either order.
 // Buzzer sessions (SPEC-partB 6, 1.12.0) live in session.js: the 11 places a team (seatCount), and the move and Add player
 // actions, which this file lists with the swaps. A game has no `session` field, so nothing here changes for one.
+// Packet mode (SPEC-partB 5, 1.14.0) lives in packet-match.js: the packet a match keeps (`packet`, copied in by newMatch),
+// a buzz's `word`, a cycle's `tossupNumberOverride`, and the 'word' and 'tossupNumber' actions, which this file lists. A match
+// with no packet has none of these fields, so nothing here changes for one.
 
 import { clockRunning, defaultClockRules } from './clock.js';
 import { defaultSubsRules, inWindow, lineupAt, lineupsOf, playerName, playersOf, subsRules } from './lineup.js';
 import { addProtest, keepsRecord, readBonuses, replacementBounds, replacementMissing, setProtestStatus, throwOut } from './protests.js';
 import { addPlayer, checkSessionSub, isSession, movePlayer, paddedSeats, seatCount, sessionRows, strandedMoveText, strandedArrivalText, strandedBuzzText } from './session.js';
+import { checkWord, isTossupNumber, isWord, markWord, setTossupNumber, tossupNumbers } from './packet-match.js';
 
 const RESULTS = ['power', 'ten', 'neg', 'wrong'];
 const CORRECT = ['power', 'ten'];
@@ -94,8 +98,9 @@ const withDefaultRules = rules => ({
 });
 
 // `session` true starts a buzzer session (SPEC-partB 6.3), marked `session: true`; a game has no such field.
-export function newMatch({ rules, teams, details = {}, display = {}, id, now, session = false }) {
-  return {
+// `packet` (packet mode, SPEC-partB 5.3) is copied in as { ref, tossups, bonuses }; with none the record has no such field.
+export function newMatch({ rules, teams, details = {}, display = {}, id, now, session = false, packet = null }) {
+  const match = {
     id, createdAt: now, changedAt: now, rev: 0, nextCycleNo: 1,
     ...(session === true ? { session: true } : {}),
     rules: withDefaultRules(rules),
@@ -106,6 +111,8 @@ export function newMatch({ rules, teams, details = {}, display = {}, id, now, se
     markers: [],
     clock: [],                                    // v2 3.1: [ { type: 'start' | 'stop', at } ]
   };
+  if (packet !== null && typeof packet === 'object') match.packet = structuredClone({ ref: packet.ref, tossups: packet.tossups, bonuses: packet.bonuses });
+  return match;
 }
 
 // A cycle with nothing entered: every field of the Cycle shape at its default.
@@ -245,11 +252,17 @@ function checkStreakTurn(match, cycle, { team, seat, answers, wrong }) {
   checkTeamTurn(cycle, team, match.teams[team].name, 'streak');
 }
 
-function buzz(match, { team, seat, result }, open, entry, phase, now) {
+function buzz(match, { team, seat, result, word = null }, open, entry, phase, now) {
+  if (word !== null) checkWord(match, word);          // packet mode: the word the marker sat on (packet-match.js)
   const cycle = openCycleOf(match, open) ?? startCycle(match, entry, phase, now);
   const format = formatOf(cycle, match.rules);
   const entered = { team, seat, result };
   if (format === 'jackpot') entered.clue = cycle.clue;
+  if (word !== null) {
+    entered.word = word;
+    const read = tossupNumbers(match).cycles[match.cycles.indexOf(cycle)]?.read;   // the tossup this cycle reads (null after the end)
+    if (read != null) entered.wordTossup = read;
+  }
   checkBuzz(match, cycle, entered);
   checkCarried(match, entry, team, seat);
   cycle.buzzes.push(entered);
@@ -257,6 +270,11 @@ function buzz(match, { team, seat, result }, open, entry, phase, now) {
   // (A buzz allowed after time called closes its cycle with no rebound: see isClosed.)
   const { parts } = match.rules.bonus;
   if (CORRECT.includes(result) && parts > 0 && !cycle.noBonus) cycle.bonus = bareSet(parts);
+}
+
+// Packet mode's typed tossup number (packet-match.js), on the open question or one it opens.
+function tossupNumber(match, action, open, entry, phase, now) {
+  setTossupNumber(match, openCycleOf(match, open) ?? startCycle(match, entry, phase, now), action);
 }
 
 function refuseIfAnswered(cycle) {
@@ -681,6 +699,13 @@ function checkedCycle(match, id, given) {
   cycle.note = value('note');
   checkBonusNumber(value('bonusNumberOverride'));
   cycle.bonusNumberOverride = value('bonusNumberOverride');
+  // Packet mode (1.14.0): a typed tossup number, kept only when there is one. Kept with no packet too, as a word is, since a
+  // match sent by link keeps its words and numbers but not the packet's text.
+  const typedTossup = given.tossupNumberOverride ?? null;
+  if (typedTossup !== null) {
+    if (!isTossupNumber(typedTossup)) throw bad('a tossup number is a whole number from 1 to 999');
+    cycle.tossupNumberOverride = typedTossup;
+  }
 
   const list = (key, fits) => {
     if (!Array.isArray(value(key)) || !value(key).every(fits)) throw bad(`${key} must be a list of entries`);
@@ -689,6 +714,14 @@ function checkedCycle(match, id, given) {
   for (const b of list('buzzes', isObject)) {
     const entered = { team: b.team, seat: b.seat, result: b.result };
     if (format === 'jackpot') entered.clue = checkClue(match, b.clue ?? cycle.clue);   // as a live buzz takes the clue being read
+    if ((b.word ?? null) !== null) {                     // packet mode's word (1.14.0)
+      if (!isWord(b.word)) throw bad('a buzz word is a whole number from 0');
+      entered.word = b.word;
+      if ((b.wordTossup ?? null) !== null) {
+        if (!isTossupNumber(b.wordTossup)) throw bad('a word\'s tossup is a whole number from 1 to 999');
+        entered.wordTossup = b.wordTossup;
+      }
+    }
     checkBuzz(match, cycle, entered);
     cycle.buzzes.push(entered);
   }
@@ -798,13 +831,13 @@ function setRules(match, { rules }) {
 // Starter actions are refused once the match has ended, or while it waits to be ended after
 // regulation; bonus actions once it has ended. Match flow actions make their own checks, and
 // edit actions are open at any time.
-const STARTER_ACTIONS = { buzz, dead, lostTurn, starterType, format: setFormat, nextClue, streak: streakTurn };
+const STARTER_ACTIONS = { buzz, dead, lostTurn, starterType, format: setFormat, nextClue, streak: streakTurn, tossupNumber };
 const BONUS_ACTIONS = { part, allGot, noneGot, closeBonus, passRest, bonusTotal, bonusNumber };
 const FLOW_ACTIONS = { halftime, timeCalled, endMatch, endQuarter };
 const CLOCK_ACTIONS = { clock: setClock, timeout: callTimeout };
 const LINEUP_ACTIONS = { sub, addBench, deleteSub, move: movePlayer, addPlayer };   // move and addPlayer: sessions only (session.js)
 const PROTEST_ACTIONS = { protest: addProtest, protestStatus: setProtestStatus, throwOut };   // v2 5, untimed like the edits
-const EDIT_ACTIONS = { replaceCycle, deleteCycle, insertCycle, note, setRules };
+const EDIT_ACTIONS = { replaceCycle, deleteCycle, insertCycle, note, setRules, word: markWord };   // word: packet mode, 1.14.0
 const ACTIONS = { ...STARTER_ACTIONS, ...BONUS_ACTIONS, ...FLOW_ACTIONS, ...CLOCK_ACTIONS, ...LINEUP_ACTIONS, ...PROTEST_ACTIONS, ...EDIT_ACTIONS };
 
 function checkInPlay(type, { open, phase }) {
@@ -840,7 +873,9 @@ export function applyAction(match, action, now) {
   if (!handler) throw new RefusedError('unknown-action', `there is no action called ${type}`);
   const { derived, entry } = analyse(match);
   checkInPlay(type, derived);
-  const next = structuredClone(match);
+  // Every version shares the one packet (packet mode, 1.14.0): nothing changes it, and copying its 50 KB for each of 200 undo
+  // versions would waste memory. The key keeps its place in the record.
+  const next = match.packet === undefined ? structuredClone(match) : Object.assign(structuredClone({ ...match, packet: null }), { packet: match.packet });
   const live = Object.hasOwn(STARTER_ACTIONS, type) || Object.hasOwn(BONUS_ACTIONS, type);
   if (live && !clockRunning(next)) pushClock(next, 'start', now);
   handler(next, action, derived.open, entry, derived.phase, now, derived);

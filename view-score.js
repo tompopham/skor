@@ -11,6 +11,7 @@
 
 import { derive, applyAction, FORMATS } from './engine.js';
 import { keyToCommand, tapGuard, sittingNow } from './keys.js';
+import { paneActive, renderPane } from './view-pane.js';
 import { playerName } from './lineup.js';
 import { loadSettings, saveSettings } from './storage.js';
 import { clockRunning, timeoutsUsed } from './clock.js';
@@ -145,16 +146,18 @@ function renderMain(root, state, api) {
   // A chosen seat that can no longer answer (its team was wrong, the stage moved on) is dropped.
   if (ui.selected && !seatInfo(c, ui.selected.team, ui.selected.seat).on) ui.selected = null;
 
-  root.append(
-    topBar(c),
-    h('div', { class: keysAreOn() ? 'score-layout' : 'score-layout keysoff' },
-      h('div', { class: 'main', 'data-stage': d.open.stage },
-        h('p', { class: ui.msg ? 'statusline err' : 'statusline', id: 'statusline', role: 'status' }, ui.msg || d.lastEvent),
-        picker(c),
-        teamsView(c),
-        h('div', { class: 'bar', id: 'bar' }, d.open.stage === 'bonus' ? bonusPanel(c) : starterBar(c)),
-        banners(c, endMatchFlow)),
-      h('aside', { class: 'side' }, legend(c, keysAreOn()), recentList(c))));
+  const layout = h('div', { class: keysAreOn() ? 'score-layout' : 'score-layout keysoff' },
+    h('div', { class: 'main', 'data-stage': d.open.stage },
+      h('p', { class: ui.msg ? 'statusline err' : 'statusline', id: 'statusline', role: 'status' }, ui.msg || d.lastEvent),
+      picker(c),
+      teamsView(c),
+      h('div', { class: 'bar', id: 'bar' }, d.open.stage === 'bonus' ? bonusPanel(c) : starterBar(c)),
+      banners(c, endMatchFlow)),
+    h('aside', { class: 'side' }, legend(c, keysAreOn()), recentList(c)));
+  // Packet mode (1.14.0, SPEC-partB 5.4): the reading pane on the left of the scoring layout, in a wide window only.
+  const pane = paneActive(c.match);
+  root.toggleAttribute?.('data-packet', pane);
+  root.append(topBar(c), pane ? h('div', { class: 'packet-layout' }, renderPane(c, askNumber), layout) : layout);
 }
 
 // ---- Top bar ---------------------------------------------------------------------------------
@@ -425,7 +428,7 @@ function bonusPanel(c) {
 
 // A whole number typed in a dialog; asks again, with the reason, until it fits or is cancelled.
 // Resolves the number, null for an empty box (when `empty` allows it), or undefined if cancelled.
-async function askNumber(api, { title, text, initial, min, max, empty = false }) {
+export async function askNumber(api, { title, text, initial, min, max, empty = false }) {
   const input = h('input', { type: 'number', inputmode: 'numeric', step: '1', min, max, 'aria-label': title });
   input.value = initial ?? '';
   const note = h('p', { class: 'msg' });

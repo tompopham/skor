@@ -8,6 +8,8 @@
 // From 1.7.0 (SPEC-partB 1.2): Send match is the sixth file action, and Past matches tags a copy a sent match replaced.
 // From 1.11.0 (SPEC-partB 3.2): Save QBJ file is the seventh (view-qbj.js); a trivia match has a line in its place.
 
+import { matchPacket, unmarkedCount } from './packet-match.js';
+import { packetFileName, packetFileText, buzzPointsCsv, buzzPointsFileName } from './packet-files.js';
 import { derive } from './engine.js';
 import { toScoresheetHTML, toCSV, resultLine, fileName, offerFile, sheetRows } from './files.js';
 import { canSaveQbj, qbjReason } from './qbj.js';
@@ -253,6 +255,11 @@ function fileActions(state, api, say) {
     const file = { name: fileName(match, ext), type, text: make(match, derive(match)) };
     report(file, await offerFile(file));
   };
+  const saveNamed = (nameOf, type, make) => async () => {
+    const { match } = state;
+    const file = { name: nameOf(match), type, text: make(match, derive(match)) };
+    report(file, await offerFile(file));
+  };
   const saveBackup = async () => {
     const name = fileName(state.match, 'json');
     report({ name }, await api.offerBackup());
@@ -293,6 +300,11 @@ function fileActions(state, api, say) {
     ['send', 'Send match', () => api.sendMatch()],
     // Added last, so no earlier button moves. A trivia match gets the reason in its place, not a button.
     canSaveQbj(state.match) ? ['qbj', 'Save QBJ file', () => qbjDialog(state, api)] : ['qbj', qbjReason(state.match), null],
+    // Packet mode (1.14.0, SPEC-partB 5.5): the packet for the buzzpoints.org upload, and the buzz points for clue study.
+    ...(matchPacket(state.match) ? [
+      ['packet', 'Save packet file', saveNamed(packetFileName, 'application/json', m => packetFileText(m))],
+      ['buzzcsv', 'Save buzz points (CSV)', saveNamed(buzzPointsFileName, 'text/csv;charset=utf-8', buzzPointsCsv)],
+    ] : []),
   ];
 }
 
@@ -329,6 +341,12 @@ export function renderSheet(root, state, api) {
   const note = late.length === 0 ? null : h('p', { class: 'afternote noprint', id: 'after-note' },
     `${late.join(', ')} ${late.length === 1 ? 'comes' : 'come'} after the end of the match. ${late.length === 1 ? 'It is' : 'They are'} listed and marked on the sheet, and not counted in the scores or the statistics.`);
 
+  // Packet mode (1.14.0, SPEC-partB 5.4): the buzzes with no word, which a question's editor can still mark.
+  const unmarkedLine = (m, derived) => {
+    const n = unmarkedCount(m, derived);
+    return n === 0 ? null : h('p', { class: 'hint noprint', id: 'unmarked' }, `Buzz points not marked: ${n}. Open a question to mark its words.`);
+  };
+
   // One reserved line under the heading: the hint, or what a file action, a swap's Delete or a protest last said.
   const message = h('p', { class: state.ui.fmsg?.bad ? 'msg fmsg noprint' : 'hint fmsg noprint', id: 'files-msg', role: 'status' }, state.ui.fmsg?.text || HINT);
   const say = (text, bad = false) => {
@@ -345,6 +363,7 @@ export function renderSheet(root, state, api) {
         h('button', { type: 'button', class: 'btn small', id: 'sheet-back', onclick: () => api.back() }, 'Back'))),
     message,
     note,
+    unmarkedLine(match, d),
     sheet));
   chooseView();
   watchSize();

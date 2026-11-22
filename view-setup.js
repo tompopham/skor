@@ -15,10 +15,14 @@
 // name not in the file is marked, and Start needs the round as a whole number.
 // Version 1.12.0 (SPEC-partB 6.4): a choice under the format, Game or Buzzer session (view-setup-session.js). In a session each
 // team shows 4 name boxes and Add player (up to 10), no Bench, and Start needs no round and builds the session record.
+// Version 1.14.0 (SPEC-partB 5.2): in a window at least 1024 px wide, a quizbowl format gains Packet beside Rules and Details,
+// which opens the packet choice (view-packet.js); Start copies the chosen packet into the match.
 
 import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset, presetUnverified } from './presets.js';
 import { newMatch } from './engine.js';
-import { forgetRoster, loadRoster, saveRoster } from './storage.js';
+import { forgetRoster, loadPacket, loadRoster, saveRoster } from './storage.js';
+import { packetAllowed, packetForMatch } from './packet-match.js';
+import { packetContent, packetOffered, packetStatus } from './view-packet.js';
 import { h, newId } from './dom.js';
 import { renderRulesScreen, rulesDiffer } from './view-rules.js';
 import { ratingMarks } from './view-win.js';
@@ -40,8 +44,9 @@ function freshDraft() {
     rules: rulesFromPreset(DEFAULT_PRESET_ID),
     teams: [0, 1].map(() => ({ name: '', seats: ['', '', '', ''], bench: ['', ''] })),
     details: { competition: '', venue: '', round: '', room: '', reader: '', scorer: '' },
-    open: { details: false, bench: [false, false] },
+    open: { details: false, bench: [false, false], packet: false },
     session: false,   // 1.12.0: a buzzer session (view-setup-session.js); false is a game
+    packetId: null,   // 1.14.0: the packet chosen for the match, by its id on this device (view-packet.js)
   };
 }
 
@@ -389,12 +394,13 @@ export function renderSetup(root, state, api) {
       if (choice !== 'switch') { format.value = draft.presetId; return; }
     }
     const offered = sessionOffered(draft.presetId);
+    const packets = packetAllowed(draft.rules);
     draft.presetId = id;
     draft.rules = rulesFromPreset(id);
     summary.textContent = rulesSummary(draft.rules);
     // A format that is not played as a session forces Game; the choice itself is drawn only where it is offered.
     if (!sessionOffered(id)) draft.session = false;
-    if (offered !== sessionOffered(id)) redraw();
+    if (offered !== sessionOffered(id) || packets !== packetAllowed(draft.rules)) redraw();
   });
   const rulesButton = h('button', {
     type: 'button', class: 'btn small', id: 'setup-rules',
@@ -402,6 +408,8 @@ export function renderSetup(root, state, api) {
   }, 'Rules');
   const detailsButton = h('button', { type: 'button', class: 'btn small', id: 'setup-details', 'aria-label': 'Match details' }, 'Details');
   const detailsSection = openedSection(draft, 'details', 'Match details', 'details-fold', detailsContent(draft, now, api, redraw), detailsButton);
+  const packetButton = packetOffered(draft) ? h('button', { type: 'button', class: 'btn small', id: 'setup-packet' }, 'Packet') : null;
+  const packetSection = packetButton ? openedSection(draft, 'packet', 'Packet', 'packet-fold', packetContent(draft, api, redraw), packetButton) : null;
 
   // Start: the typed names go to the roster, the draft becomes a match, and the page takes over. With a tournament file the
   // round must be a whole number first (YellowFruit files the game by it): Match details opens at the Round box.
@@ -423,6 +431,13 @@ export function renderSetup(root, state, api) {
     }
     const otherProblem = otherNameProblem(draft);
     if (otherProblem) { startMsg.textContent = otherProblem; return; }
+    // The chosen packet goes into the match as its own copy (SPEC-partB 5.3); a quizbowl format only.
+    let packet = null;
+    if (draft.packetId && packetAllowed(draft.rules)) {
+      const kept = loadPacket(draft.packetId);
+      if (!kept) { startMsg.textContent = 'The chosen packet can no longer be read: remove it in Packet and load it again, or choose No packet.'; return; }
+      packet = packetForMatch(kept);
+    }
     const teams = session ? sessionTeamsFromDraft(draft) : teamsFromDraft(draft);
     const typed = session ? teams.flatMap(team => team.seats)
       : draft.teams.flatMap(team => [...team.seats.slice(0, START_BOXES), ...(team.bench ?? [])].map(name => name.trim()).filter(Boolean));
@@ -434,6 +449,7 @@ export function renderSetup(root, state, api) {
       id: newId(),
       now: api.now(),
       ...(session ? { session: true } : {}),
+      ...(packet ? { packet } : {}),
     });
     api.setUi({ setup: null }, false);
     api.startMatch(match);
@@ -450,8 +466,10 @@ export function renderSetup(root, state, api) {
     summary,
     modeChoice(draft, redraw),
     tournamentStatus(now),
+    packetStatus(draft),
     h('div', { class: 'grid2 tcards' }, teamCard(draft, 0, rosterId, () => keyLabels(), now), teamCard(draft, 1, rosterId, () => keyLabels(), now)),
     detailsSection,
+    packetSection,
     h('div', { class: wide ? 'startbar withforget' : 'startbar' }, startMsg, start, wide ? forget : null),
     h('p', { class: 'hint', id: 'setup-hint' }, sessionOn(draft)
       ? 'Names are saved on this device for next time. A team may start with no names: everyone is then on Other, which is always there.'
@@ -479,6 +497,6 @@ export function renderSetup(root, state, api) {
   const back = h('button', { type: 'button', class: 'btn small', onclick: () => api.go('home') }, 'Home');
   root.append(
     h('div', { class: 'top setuptop' }, h('h1', { tabindex: '-1' }, 'New match'),
-      h('div', { class: 'fmt' }, format, rulesButton, detailsButton), h('div', { class: 'acts' }, back)),
+      h('div', { class: 'fmt' }, format, rulesButton, detailsButton, packetButton), h('div', { class: 'acts' }, back)),
     form, roster, ...[teamList(now)].filter(Boolean));   // no tournament file: no team list (append would write "null", 1.11.0 to 1.12.0)
 }

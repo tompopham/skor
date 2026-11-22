@@ -9,6 +9,8 @@
 import { derive } from './engine.js';
 import { defaultClockRules } from './clock.js';
 import { defaultSubsRules } from './lineup.js';
+import { soundPacket } from './packet-match.js';
+import { readPacket } from './packet.js';
 
 export const KEYS = {
   index: 'scorer.index',
@@ -17,6 +19,8 @@ export const KEYS = {
   settings: 'scorer.settings',
   ratings: 'scorer.ratings',      // win percentage's ratings file (SPEC-partB 0.3 and 2.1), as its text
   tournament: 'scorer.tournament',   // the tournament file loaded on Setup (SPEC-partB 0.3 and 3.4), as its text
+  packets: 'scorer.packets',      // packet mode's list of packets ready on this device (SPEC-partB 0.3 and 5.2); each is scorer.packet.<id>
+  qbsets: 'scorer.qbsets',        // packet mode: qbreader's set names, kept after the first fetch for the suggestions (SPEC-partB 5.2)
 };
 const MATCH_PREFIX = 'scorer.match.';
 export const matchKey = id => `${MATCH_PREFIX}${id}`;
@@ -266,6 +270,102 @@ export function loadTournamentText(store = defaultStore()) {
 export const saveTournamentText = (text, store = defaultStore()) => attempt(() => store.setItem(KEYS.tournament, String(text)));
 export const removeTournamentText = (store = defaultStore()) => attempt(() => store.removeItem(KEYS.tournament));
 
+// ---- Packets ready on this device (packet mode, SPEC-partB 5.2) --------------------------------
+
+// Each packet is kept under its own key with a short list in scorer.packets, so a scorer loads packets at home and scores
+// with no signal at the venue. A packet is about 50 KB; browsers give a site about 5 MB, so past 4 MB of Skor's own
+// storage (its scorer. keys, counted in characters) a save says the device is nearly full. Never a silent failure.
+const PACKET_PREFIX = 'scorer.packet.';
+export const NEARLY_FULL = 4 * 1024 * 1024;
+export const NEARLY_FULL_TEXT = "This device's Skor storage is nearly full: remove old packets in New match, Packet, or save and delete old matches.";
+export const STORAGE_FULL_TEXT = "This device's Skor storage is full, so the packet was not kept: remove old packets in New match, Packet, or save and delete old matches.";
+
+// Characters held in Skor's own keys and their values, or null when the store cannot list its keys or be read.
+export function storageUsed(store = defaultStore()) {
+  try {
+    if (typeof store.keys !== 'function') return null;
+    let used = 0;
+    for (const key of store.keys()) if (key.startsWith('scorer.')) used += key.length + String(store.getItem(key) ?? '').length;
+    return used;
+  } catch {
+    return null;
+  }
+}
+
+const textOrNull = value => (typeof value === 'string' ? value : null);
+const countOf = value => (Number.isInteger(value) && value >= 0 ? value : 0);
+// The list of packets ready on this device, oldest first: { id, name, setName, packetNumber, tossups, bonuses, source,
+// fileName, loadedAt }. A damaged list reads as empty and a damaged line is left out.
+export function listPackets(store = defaultStore()) {
+  const list = readJSON(store, KEYS.packets, []);
+  if (!Array.isArray(list)) return [];
+  return list.filter(entry => isObject(entry) && typeof entry.id === 'string' && entry.id !== '').map(entry => ({
+    id: entry.id, name: textOrNull(entry.name) ?? 'Packet', setName: textOrNull(entry.setName),
+    packetNumber: Number.isInteger(entry.packetNumber) ? entry.packetNumber : null,
+    tossups: countOf(entry.tossups), bonuses: countOf(entry.bonuses),
+    source: textOrNull(entry.source), fileName: textOrNull(entry.fileName),
+    loadedAt: Number.isFinite(entry.loadedAt) ? entry.loadedAt : null,
+  }));
+}
+
+const newPacketId = now => `p${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+// Keeps a packet read by packet.js, with where it came from ({ source: 'qbreader' | 'file' | 'docx', fileName }). A packet
+// with the same name replaces the one kept before. { ok: true, id, nearlyFull } or { ok: false, error }: the packet goes
+// first, so a refused write leaves the list as it was.
+export function savePacket(packet, { source = null, fileName = null } = {}, store = defaultStore(), { id = null, now = Date.now() } = {}) {
+  try {
+    const key = id ?? newPacketId(now);
+    const kept = { name: packet.name, setName: packet.setName ?? null, packetNumber: packet.packetNumber ?? null, source, fileName, loadedAt: now, tossups: packet.tossups, bonuses: packet.bonuses };
+    const list = listPackets(store);
+    const replaced = list.filter(entry => entry.name === packet.name);
+    try {
+      store.setItem(`${PACKET_PREFIX}${key}`, JSON.stringify(kept));
+    } catch {
+      return { ok: false, error: STORAGE_FULL_TEXT };
+    }
+    const entry = { id: key, name: kept.name, setName: kept.setName, packetNumber: kept.packetNumber, tossups: kept.tossups.length, bonuses: kept.bonuses.length, source, fileName, loadedAt: now };
+    try {
+      store.setItem(KEYS.packets, JSON.stringify([...list.filter(e => e.name !== packet.name), entry]));
+    } catch {
+      attempt(() => store.removeItem(`${PACKET_PREFIX}${key}`));
+      return { ok: false, error: STORAGE_FULL_TEXT };
+    }
+    for (const old of replaced) if (old.id !== key) attempt(() => store.removeItem(`${PACKET_PREFIX}${old.id}`));
+    const used = storageUsed(store);
+    return { ok: true, id: key, nearlyFull: used !== null && used > NEARLY_FULL };
+  } catch (error) {
+    return { ok: false, error: messageOf(error) };
+  }
+}
+
+// qbreader's set names as kept: { sets, fetchedAt }, or null when none are kept or they are damaged.
+export function loadSetNames(store = defaultStore()) {
+  const kept = readJSON(store, KEYS.qbsets, null);
+  if (!isObject(kept) || !Array.isArray(kept.sets) || !kept.sets.every(name => typeof name === 'string')) return null;
+  return { sets: kept.sets, fetchedAt: Number.isFinite(kept.fetchedAt) ? kept.fetchedAt : null };
+}
+export const saveSetNames = (sets, fetchedAt, store = defaultStore()) => attempt(() => store.setItem(KEYS.qbsets, JSON.stringify({ sets, fetchedAt })));
+
+// A kept packet, checked again as packet.js reads one, with where it came from; null when there is none or it is damaged.
+export function loadPacket(id, store = defaultStore()) {
+  const kept = readJSON(store, `${PACKET_PREFIX}${id}`, null);
+  if (!isObject(kept)) return null;
+  const read = readPacket({ name: kept.name, tossups: kept.tossups, bonuses: kept.bonuses });
+  if (!read.ok) return null;
+  return { ...read.packet, setName: textOrNull(kept.setName), packetNumber: Number.isInteger(kept.packetNumber) ? kept.packetNumber : null,
+    source: textOrNull(kept.source), fileName: textOrNull(kept.fileName), loadedAt: Number.isFinite(kept.loadedAt) ? kept.loadedAt : null };
+}
+
+// Remove: the packet and its line. A store that cannot be read or written comes back { ok: false, error }.
+export function removePacket(id, store = defaultStore()) {
+  return attempt(() => {
+    const list = readJSON(store, KEYS.packets, []);
+    store.removeItem(`${PACKET_PREFIX}${id}`);
+    store.setItem(KEYS.packets, JSON.stringify((Array.isArray(list) ? list : []).filter(entry => entry?.id !== id)));
+  });
+}
+
 // ---- Backup files ---------------------------------------------------------------------------
 
 // A record saved before the trivia formats has none of these on its cycles, and derive() reads
@@ -306,6 +406,18 @@ function fillProtestDefaults(match) {
   }
 }
 
+// Packet mode (1.14.0): a match's packet that does not read as a packet (a damaged or hand-edited file) is dropped, so the match
+// opens and scores as buzzer mode with its words kept, never breaking a screen. A record with no packet is left alone.
+// A sound packet is kept as readPacket cleans it (a bonus with no values gets the usual ten for each part), so the pane
+// never meets a raw bonus it cannot read.
+function fillPacketDefaults(match) {
+  if (!Object.hasOwn(match, 'packet')) return;
+  if (!soundPacket(match.packet)) { delete match.packet; return; }
+  const read = readPacket({ tossups: match.packet.tossups, bonuses: match.packet.bonuses });
+  match.packet.tossups = read.packet.tossups;
+  match.packet.bonuses = read.packet.bonuses;
+}
+
 const unreadable = error => ({ ok: false, error });
 
 // Reads a backup file's text, or a saved record: { ok: true, match } or { ok: false, error } with
@@ -331,6 +443,7 @@ export function parseBackup(text) {
   fillClockDefaults(match);
   fillLineupDefaults(match);
   fillProtestDefaults(match);
+  fillPacketDefaults(match);
   try {
     derive(match);
   } catch (error) {

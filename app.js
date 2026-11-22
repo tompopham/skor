@@ -16,6 +16,7 @@ import { sendDialog, offerLink, showSent, askToSave } from './view-send.js';
 import { winDialog } from './view-win.js';
 import { renderSetup } from './view-setup.js';
 import { renderScore } from './view-score.js';
+import { buzzEntered, wordForBuzz } from './view-pane.js';
 import { stopClockTicker } from './view-banners.js';
 import { renderSheet, renderPast } from './view-sheet.js';
 import { renderBoard, stopBoard, CHANNEL_NAME } from './view-board.js';
@@ -310,12 +311,16 @@ function dispatchAll(actions, uiPatch = {}) {
   if (state.foreign) return { ok: false, error: new Error('This match changed in another tab. Reload it before scoring.') };
   if (state.peek) { askToSave(state.match, api); return { ok: false, error: new Error(PEEKING) }; }
   let next = state.match;
+  // Packet mode (1.14.0): a buzz takes the reading pane's marker word, when the marker was moved for it (view-pane.js).
+  const buzzWord = actions.some(a => a?.type === 'buzz' && a.word === undefined) ? wordForBuzz(state, derive(state.match)) : undefined;
+  const marked = actions.map(a => (a?.type === 'buzz' && a.word === undefined && buzzWord !== undefined ? { ...a, word: buzzWord } : a));
   try {
-    for (const action of actions) next = applyAction(next, action, now());
+    for (const action of marked) next = applyAction(next, action, now());
   } catch (error) {
     if (error instanceof RefusedError) return { ok: false, error };
     throw error;
   }
+  if (marked.some(a => a?.type === 'buzz')) buzzEntered(state, buzzWord !== undefined);
   state.history.push(next);
   noteSubClose(uiPatch);
   Object.assign(state.ui, { msg: '', hint: null }, uiPatch);

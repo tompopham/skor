@@ -3,6 +3,8 @@
 // what is allowed and this file only shows its reasons. Edit rules, the other screen opened this way, is view-rules.js
 // from version 1.6.0.
 
+import { matchPacket, tossupNumbers, tossupText, wordState } from './packet-match.js';
+import { questionView } from './view-pane.js';
 import { derive, applyAction } from './engine.js';
 import { swapLines } from './files.js';
 import { lineupAt, playerName } from './lineup.js';
@@ -25,6 +27,9 @@ const CSS = `
 .erow > select.who { flex: 1 1 100%; }
 .erow > .btn { flex: none; }
 .erow > .lab { flex: 0 0 64px; font-size: 14px; }
+.ewordctl { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; align-items: center; }
+.edpane { border: 1px solid var(--line); padding: 4px 12px; }
+.editor .edpane .ptext { font-size: 18px; }
 .card > .inner { display: grid; gap: 12px; }
 .edhead { position: sticky; top: 0; z-index: 3; background: var(--bg); margin-top: -8px; padding-top: 8px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
 /* Tab or a tap that brings a box into view stops it below the fixed header, not under it. */
@@ -205,6 +210,52 @@ export function renderCycleEditor(root, state, api) {
     redraw();
   }, { 'aria-label': label, class: 'who' });
 
+  // Packet mode (1.14.0, SPEC-partB 5.4): the tossup this question read, its number (typed, or the lowest not yet read),
+  // and its text, where a click gives the chosen buzz its word. Each buzz row says its word and can clear it. A match whose
+  // packet is not here (sent by link) still shows and clears its words.
+  const packet = matchPacket(match);
+  const probe = { ...match, cycles: match.cycles.map((x, k) => (k === index ? { ...x, tossupNumberOverride: draft.tossupNumberOverride ?? undefined } : x)) };
+  const readNumber = packet ? tossupNumbers(probe, d).cycles[index]?.read ?? null : null;
+  const question = readNumber ? tossupText(match, readNumber) : null;
+  sub.wordFor = Math.min(sub.wordFor ?? Math.max(0, draft.buzzes.findIndex(b => !Number.isInteger(b.word))), Math.max(0, draft.buzzes.length - 1));
+  const wordText = word => (question ? (word >= question.end ? 'end of question' : `word ${word + 1}, “${question.words[word]}”`) : `word ${word + 1}`);
+  // A word counts only on the tossup it was marked on, and within that question (packet-match.js wordState); otherwise say so.
+  const wordLine = buzz => {
+    if (!Number.isInteger(buzz.word)) return 'no word';
+    if (!readNumber || wordState(buzz, { read: readNumber, end: question?.end ?? null }) === 'ok') return wordText(buzz.word);
+    if (buzz.wordTossup !== readNumber) return `marked on tossup ${buzz.wordTossup ?? '?'}, now reads ${readNumber}; mark it again`;
+    return `word ${buzz.word + 1} is past the end of tossup ${readNumber}; mark it again`;
+  };
+  function wordControl(buzz, i) {
+    if (!packet && !Number.isInteger(buzz.word)) return null;
+    return h('span', { class: 'ewordctl' },
+      h('span', { class: 'hint', 'data-word-of': i }, wordLine(buzz)),
+      question ? h('button', { type: 'button', class: 'btn small', 'aria-pressed': String(sub.wordFor === i), onclick: () => { sub.wordFor = i; redraw(); } }, 'Mark') : null,
+      Number.isInteger(buzz.word) ? h('button', { type: 'button', class: 'btn small', onclick: () => { delete buzz.word; delete buzz.wordTossup; redraw(); } }, 'Clear word') : null);
+  }
+  function packetText() {
+    if (!packet) return [];
+    const box = h('input', { type: 'number', inputmode: 'numeric', min: 1, max: 999, step: 1, id: 'ed-tossup', placeholder: 'next in the packet' });
+    box.value = draft.tossupNumberOverride ?? '';
+    box.addEventListener('change', () => {
+      const n = Number(box.value);
+      if (box.value === '') delete draft.tossupNumberOverride;
+      else if (Number.isInteger(n) && n >= 1 && n <= 999) draft.tossupNumberOverride = n;
+      redraw();
+    });
+    const parts = [field('Tossup number (empty: the lowest not yet read)', box)];
+    if (!question) parts.push(h('p', { class: 'hint' }, `This packet has no tossup ${readNumber ?? ''}.`));
+    else {
+      parts.push(h('p', { class: 'hint' }, draft.buzzes.length ? `Tossup ${readNumber}. Click the word buzz ${sub.wordFor + 1} came on.` : `Tossup ${readNumber}.`));
+      parts.push(h('div', { class: 'edpane' }, questionView(question, {
+        marker: wordState(draft.buzzes[sub.wordFor], { read: readNumber, end: question.end }) === 'ok' ? draft.buzzes[sub.wordFor].word : null,
+        buzzWords: draft.buzzes.flatMap((b, k) => (wordState(b, { read: readNumber, end: question.end }) === 'ok' ? [{ word: b.word, label: String(k + 1) }] : [])),
+        onWord: word => { const target = draft.buzzes[sub.wordFor]; if (target) { target.word = word; target.wordTossup = readNumber; redraw(); } },
+      })));
+    }
+    return parts;
+  }
+
   // Starter: type or format, buzzes, Streak turns, lost turns.
   const starter = [h('h2', {}, 'Starter')];
   if (rules.starterTypes.on) {
@@ -231,7 +282,9 @@ export function renderCycleEditor(root, state, api) {
     select(resultOptions.some(([v]) => v === buzz.result) ? resultOptions : [...resultOptions, [buzz.result, buzz.result]], buzz.result, v => { buzz.result = v; redraw(); }, { 'aria-label': `Buzz ${i + 1}: result` }),
     draft.format === 'jackpot' && rules.trivia
       ? select(rules.trivia.jackpot.map((points, k) => [k, `Clue ${k + 1}`]), buzz.clue ?? draft.clue, v => { buzz.clue = Number(v); redraw(); }, { 'aria-label': `Buzz ${i + 1}: clue` }) : null,
-    h('button', { type: 'button', class: 'btn small', onclick: () => { draft.buzzes.splice(i, 1); redraw(); } }, 'Remove buzz'))));
+    h('button', { type: 'button', class: 'btn small', onclick: () => { draft.buzzes.splice(i, 1); redraw(); } }, 'Remove buzz'),
+    wordControl(buzz, i))));
+  starter.push(...packetText());
   starter.push(h('button', {
     type: 'button', class: 'btn', id: 'ed-add-buzz', disabled: draft.buzzes.length >= 2,
     onclick: () => { draft.buzzes.push({ ...firstFree(draft.buzzes.map(b => b.team)), result: 'ten' }); redraw(); },

@@ -4,7 +4,7 @@
 // old one and WAITS. It takes over only when the page posts 'skipWaiting' (the Reload button on "Update
 // ready: reload when the match is over"), so a match is never reloaded out from under the scorer.
 
-const VERSION = '1.13.1';
+const VERSION = '1.14.0';
 const CACHE = `scorer-${VERSION}`;
 
 // Every file the page loads. test/version.test.mjs fails if a file in site/ is missing from this list, or
@@ -21,9 +21,13 @@ const FILES = [
   './keys.js',
   './link.js',
   './lineup.js',
+  './packet.js',
+  './packet-files.js',
+  './packet-match.js',
   './presets.js',
   './protests.js',
   './qbj.js',
+  './qbreader.js',
   './session.js',
   './sound.js',
   './storage.js',
@@ -37,6 +41,8 @@ const FILES = [
   './view-common.js',
   './view-editor.js',
   './view-menu.js',
+  './view-packet.js',
+  './view-pane.js',
   './view-players.js',
   './view-protest.js',
   './view-qbj.js',
@@ -87,6 +93,8 @@ self.addEventListener('message', event => {
 self.addEventListener('fetch', event => {
   const { request } = event;
   if (request.method !== 'GET') return;
+  // Packet mode's calls to qbreader (1.14.0) go straight to the network: only this site's own files are kept.
+  if (new URL(request.url).origin !== self.location.origin) return;
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
     const kept = await cache.match(request, { ignoreSearch: true });

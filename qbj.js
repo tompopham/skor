@@ -9,13 +9,15 @@
 // never points; one match_questions entry per tossup read, dead ones too, with each buzz's points as Skor scored them (a
 // wrong answer after the end is 0: the site does not re-score); overtime counted apart, since YellowFruit refuses 21
 // tossups in a 20-tossup game otherwise; _round as a number. Lineups carry the `reason` the schema requires (MODAQ leaves
-// it out; neither reader reads lineups). Packet mode's buzz_position and packets come later (SPEC-partB 5.5).
+// it out; neither reader reads lineups). Packet mode (1.14.0, SPEC-partB 5.5) adds buzz_position.word_index on each buzz with a
+// word, `packets` (the packet's name), and the tossup numbers of packet-match.js (a typed number, a throw-out's replacement).
 
 import { derive } from './engine.js';
 import { lineupsOf, playerName, playersOf } from './lineup.js';
 import { leftRight, teamName } from './view-common.js';
 import { isSession } from './session.js';
 import { protestWords } from './protests.js';
+import { matchPacket, tossupNumbers, countedWord } from './packet-match.js';
 
 export const QBJ_TRIVIA = 'QBJ files cannot hold trivia formats';
 
@@ -78,9 +80,10 @@ export function toQbj(match, d = derive(match)) {
   const teamRef = team => ({ name: teamName(match, team), players: players[team].map(id => ({ name: nameOf(team, id) })) });
   const refs = [teamRef(0), teamRef(1)];
 
-  // Packet tossup numbers, MODAQ's sequential rule: each thrown-out tossup moves every later tossup on by one, and the
-  // cycle it was thrown out of reads the next one (Deep Bench: thrown out at Q6, so Q6 reads tossup 7 and Q7 tossup 8).
-  let thrownSoFar = 0;
+  // Packet tossup numbers (packet-match.js): the lowest not yet read, or a typed one (packet mode); each thrown-out tossup is
+  // used up and the cycle it was thrown out of reads the next one (MODAQ's rule; Deep Bench: thrown out at Q6, so Q6 reads
+  // tossup 7 and Q7 tossup 8). With no typed numbers this is the sequential rule of 1.11.0.
+  const tossupsRead = tossupNumbers(match, d).cycles;
   const notes = [];
   const statusLines = [];
   const answerLines = [];
@@ -93,11 +96,10 @@ export function toQbj(match, d = derive(match)) {
   const bounceValue = rules.bonus.bounce === 'same' ? partValue : (rules.bonus.bounce ?? 0);
 
   const questions = counted.map(({ dc, index, cycle }) => {
-    const original = dc.number + thrownSoFar;
-    const thrown = (cycle.thrownOut ?? []).filter(t => t.part === 'tossup').length;
-    thrownSoFar += thrown;
-    const read = { question_number: original + thrown, type: 'tossup', parts: 1 };
-    for (let k = 0; k < thrown; k++) notes.push(`Tossup thrown out on question ${original + k}`);
+    const numbers = tossupsRead[index];
+    const thrown = numbers.thrown.length;
+    const read = { question_number: numbers.read, type: 'tossup', parts: 1 };
+    for (const n of numbers.thrown) notes.push(`Tossup thrown out on question ${n}`);
     // A bonus thrown out before the cycle's tossup was thrown out went with that tossup; only one thrown out after the last
     // tossup throw-out is the bonus in the file.
     const throws = cycle.thrownOut ?? [];
@@ -105,11 +107,12 @@ export function toQbj(match, d = derive(match)) {
     const bonusThrown = throws.filter((t, i) => t.part === 'bonus' && i > lastTossupThrow).length;
     if (dc.bonusNumber !== null) for (let k = 0; k < bonusThrown; k++) notes.push(`Bonus thrown out on question ${dc.bonusNumber}`);
 
-    const buzzes = dc.buzzes.map(b => {
+    const buzzes = dc.buzzes.map((b, k) => {
       const id = seatId(index, b.team, b.seat);
       tally(answers[b.team].get(id) ?? answers[b.team].set(id, new Map()).get(id), b.points);
       if (dc.overtime) tally(overtimeBuzzes[b.team], b.points);
-      return { player: { name: nameOf(b.team, id) }, team: refs[b.team], result: { value: b.points } };
+      const word = countedWord(cycle.buzzes[k], numbers);   // only a word marked on the tossup this question reads now
+      return { player: { name: nameOf(b.team, id) }, team: refs[b.team], result: { value: b.points }, ...(word !== null ? { buzz_position: { word_index: word } } : {}) };
     });
     const q = { question_number: dc.number, tossup_question: read };
     if (thrown > 0) q.replacement_tossup_question = { ...read };
@@ -190,6 +193,8 @@ export function toQbj(match, d = derive(match)) {
   qbj.match_questions = questions;
   const round = qbjRound(match);
   if (round !== null) qbj._round = round;
+  const packet = matchPacket(match);
+  if (packet?.ref?.name) qbj.packets = packet.ref.name;
   const detail = key => String(match.details?.[key] ?? '').trim();
   if (detail('room')) qbj.location = detail('room');
   if (detail('reader')) qbj.moderator = detail('reader');

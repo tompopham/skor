@@ -202,6 +202,7 @@ details.fold .inner { padding: 10px; display: grid; gap: 12px; }
 .benchrows[hidden] { display: none; }
 .benchrows > .btn { margin-left: 24px; }
 details.fold.shut:not([open]) { display: none; }
+html:has(.startbar) { scrollbar-gutter: stable; }   /* New match: a message above Start that adds a scroll bar must not push Start sideways */
 .startbar { position: sticky; bottom: 0; z-index: 2; background: var(--bg); border-top: 1px solid var(--line); padding: 8px 0; margin-top: 4px; }
 #start-match { min-height: 52px; width: 100%; max-width: 480px; }
 /* A box brought into view (Tab, the phone's next-field arrow) stops above the Start bar, not under it. */
@@ -225,6 +226,46 @@ details.fold.shut:not([open]) { display: none; }
 .dialog { z-index: 10; }
 .dialog .card { grid-template-columns: minmax(0, 1fr); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow-y: auto; }
 .stack { display: grid; gap: 6px; }
+/* Packet mode's scoring screen (1.14.0, SPEC-partB 5.4): from 1024 px, the reading pane on the left and the scoring layout
+   on the right at its narrowest fitting width; the keys and recent questions only from 1700 px. The pane scrolls inside
+   itself, never the page; the marker is black with white text, a buzz already in is underlined in grey. */
+#app[data-screen="score"][data-packet] { max-width: none; }
+.packet-layout { display: grid; grid-template-columns: minmax(0, 1fr) 660px; column-gap: 20px; align-items: start; }
+.packet-layout .score-layout { grid-template-columns: minmax(0, 1fr); }
+.packet-layout .side { display: none; }
+@media (min-width: 1700px) {
+  .packet-layout { grid-template-columns: minmax(0, 1fr) 980px; }
+  .packet-layout .score-layout { grid-template-columns: minmax(0, 1fr) 300px; }
+  .packet-layout .side { display: grid; grid-template-columns: minmax(0, 1fr); }
+}
+.pane { position: sticky; top: 8px; max-height: calc(100vh - 84px); overflow-y: auto; border: 1px solid var(--line); padding: 8px 16px 12px; }
+.pane .phead { display: flex; align-items: center; gap: 12px; }
+.pane .phead h2 { margin: 0; font-size: 20px; }
+.pane .pmeta { color: var(--muted); font-size: 14px; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.pane .ptext, .edpane .ptext { font-size: 20px; line-height: 1.5; margin: 8px 0; overflow-wrap: anywhere; }
+.pane .w, .edpane .w { cursor: pointer; }
+.pane .w:hover, .edpane .w:hover { outline: 1px solid var(--fg); }
+.pane .wbuzz, .edpane .wbuzz { border-bottom: 3px solid #888; }
+.pane .wmark, .edpane .wmark { background: var(--fg); color: var(--bg); }
+.pane .pb, .edpane .pb { font-weight: bold; } .pane .pu, .edpane .pu { text-decoration: underline; } .pane .pi, .edpane .pi { font-style: italic; }
+.pane .psub, .edpane .psub { vertical-align: sub; font-size: 0.8em; } .pane .psup, .edpane .psup { vertical-align: super; font-size: 0.8em; }
+.pane .pskip, .pane .ptag, .edpane .pskip, .edpane .ptag { color: var(--muted); }
+.pane .pmark, .edpane .pmark { font-weight: bold; }
+.pane .wend, .edpane .wend { color: var(--muted); font-size: 16px; white-space: nowrap; }
+.pane .pans, .edpane .pans { font-size: 18px; margin: 4px 0 0; overflow-wrap: anywhere; }
+.pane .plabel, .edpane .plabel { color: var(--muted); }
+.pane .pparts { margin: 8px 0 0; padding-left: 24px; }
+.pane .ppart { margin: 0 0 12px; font-size: 20px; line-height: 1.4; }
+.pane .pmarkline { font-weight: bold; font-size: 16px; min-height: 1.2em; }
+.pane .pbuzzline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+.pane .pword { margin-top: 6px; }
+
+/* New match, Packet (1.14.0): the packets ready on this device and the qbreader row. */
+#packet-inner .packetlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+#packet-inner .packetrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; }
+#packet-inner .packetrow .pname { font-weight: 600; overflow-wrap: anywhere; }
+#packet-inner .qbrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+#packet-inner .group > h3 { font-size: 15px; margin: 0; }
 .stack .btn { width: 100%; text-align: left; min-height: 48px; }
 /* Print or save's seven actions (1.11.0) in a short window with a mouse, such as a 756 x 470 Chrome window: 40 px buttons, so
    all seven and Close show without scrolling. Touch screens keep 48 px. */
