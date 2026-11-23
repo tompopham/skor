@@ -19,7 +19,7 @@
 import { clockRunning, defaultClockRules } from './clock.js';
 import { defaultSubsRules, inWindow, lineupAt, lineupsOf, playerName, playersOf, subsRules } from './lineup.js';
 import { addProtest, keepsRecord, readBonuses, replacementBounds, replacementMissing, setProtestStatus, throwOut } from './protests.js';
-import { addPlayer, checkSessionSub, isSession, movePlayer, paddedSeats, seatCount, sessionRows, strandedMoveText, strandedArrivalText, strandedBuzzText } from './session.js';
+import { addPlayer, checkSessionSub, isSession, jailPlaces, movePlayer, OTHER_PLACE, paddedSeats, seatCount, sessionBreakOf, sessionRows, strandedMoveText, strandedArrivalText, strandedBuzzText } from './session.js';
 import { checkWord, isTossupNumber, isWord, markWord, setTossupNumber, tossupNumbers } from './packet-match.js';
 
 const RESULTS = ['power', 'ten', 'neg', 'wrong'];
@@ -73,7 +73,9 @@ function teamOut(cycle, team, format) {
   return buzzCount(cycle, team) > 0 || (format === 'streak' && cycle.streak.some(s => s.team === team));
 }
 // Whether a team is kept out of a cycle by earlier ones: in jail, or locked out of a Double Jump.
-const shutOut = (entry, team) => entry.lockedOut[team] || entry.jailedOut[team];
+// In a session (1.15.0) a team whose ticked Split players have all left is kept out too (its Split list is empty).
+const shutOut = (entry, team) => entry.lockedOut[team] || entry.jailedOut[team]
+  || (entry.format === 'split' && Array.isArray(entry.eligible?.[team]) && entry.eligible[team].length === 0);
 // A cycle plays a bonus when its starter was answered correctly and a set was opened for it.
 const playsBonus = cycle => answered(cycle) && cycle.bonus !== null;
 const bounceOn = rules => rules.bonus.bounce != null;
@@ -233,12 +235,16 @@ function checkCarried(match, entry, team, seat) {
 }
 
 // Split seats: for each team one or two of its seats, all filled in the cycle at `index`, so a short team can
-// play. Returns them as a sorted copy.
+// play. In a buzzer session (1.15.0, Tom 22 Nov 2026) any number of a team's places, at least one, Other among them if
+// ticked. Returns them as a sorted copy.
 function checkSplitSeats(match, eligible, index) {
+  const most = isSession(match) ? seatCount(match) : 2;
   const fits = Array.isArray(eligible) && eligible.length === 2 && eligible.every((seats, team) =>
-    Array.isArray(seats) && seats.length >= 1 && seats.length <= 2 && new Set(seats).size === seats.length
+    Array.isArray(seats) && seats.length >= 1 && seats.length <= most && new Set(seats).size === seats.length
     && seats.every(seat => isSeat(seat, match) && seatFilled(match, index, team, seat)));
-  if (!fits) throw new RefusedError('split-seats', 'a Split needs one or two named seats from each team');
+  if (!fits) {
+    throw new RefusedError('split-seats', isSession(match) ? 'a Split needs at least one player from each team' : 'a Split needs one or two named seats from each team');
+  }
   return eligible.map(seats => [...seats].sort((a, b) => a - b));
 }
 
@@ -824,7 +830,6 @@ function checkRules(rules) {
 // score from them. The screen first shows ruleChangeDiff() and asks.
 function setRules(match, { rules }) {
   checkRules(rules);
-  if (isSession(match) && rules.trivia) throw new RefusedError('bad-action', 'a buzzer session cannot use trivia rules (Consensus, GradWrite)');   // SPEC-partB 6.4
   match.rules = structuredClone(rules);
 }
 
@@ -994,7 +999,8 @@ function bonusNumbers(match, closed, overtime) {
   });
 }
 
-const noJail = () => [[false, false, false, false], [false, false, false, false]];
+// No one in jail: one entry per place of the match (4 in a game, 11 in a session).
+const noJail = match => [0, 1].map(() => Array(seatCount(match)).fill(false));
 
 // The state each cycle starts from, worked out in order from the record (spec 5.1), then the
 // same for the cycle the next starter action would create:
@@ -1012,36 +1018,56 @@ const noJail = () => [[false, false, false, false], [false, false, false, false]
 // one before, so it plays as normal, nobody is jailed and nobody is locked out.
 // Jail is per seat and the seats are the line-up's (v2 4.2, `lineups` from lineupsOf): a seat whose player
 // changed since the cycle before starts out of jail, and "every named seat" is every seat filled in that cycle.
-// Jail is a game's four seats: trivia rules are never a buzzer session (SPEC-partB 6.4).
+// In a buzzer session (1.15.0, Tom's answers of 22 Nov 2026) only the named places 0 to 9 go to jail: Other is several
+// people, so it is never jailed and its team is never wholly out. The rules' sessionBreak says when a team breaks out:
+// 'four' (the default) when four of its named players are out, as in a game, with a team of fewer than four named players
+// under the short-team rule above; 'all' when every named player sitting is out, however many that is.
 function cycleEntries(match, lineups) {
   const { rules } = match;
+  const session = isSession(match);
+  const allPlaces = Array.from({ length: seatCount(match) }, (_, seat) => seat);
+  const jailable = session ? jailPlaces() : allPlaces;
+  const breakAll = session && sessionBreakOf(rules) === 'all';
   const quarterEnds = new Set(match.markers.filter(m => m.type === 'quarter').map(m => m.afterCycleId));
-  let jail = noJail(), breaks = [0, 0], prev = null;
+  let jail = noJail(match), breaks = [0, 0], prev = null;
   return [...match.cycles, null].map((cycle, index) => {
-    const named = lineups[index].map(seats => [0, 1, 2, 3].filter(seat => seats[seat] !== null));
+    const named = lineups[index].map(seats => jailable.filter(seat => seats[seat] !== null));
     const fullyJailed = (jail, t) => named[t].length > 0 && named[t].every(seat => jail[t][seat]);
-    const breakOrder = [0, 1].filter(t => named[t].length === 4).concat([0, 1].filter(t => named[t].length < 4));
+    const outCount = (jail, t) => named[t].filter(seat => jail[t][seat]).length;
+    const full = t => named[t].length >= 4;
+    const breakOrder = [0, 1].filter(full).concat([0, 1].filter(t => !full(t)));
     const before = prev && !quarterEnds.has(prev.id) ? prev : null;   // the cycle this one carries on from
     const carried = before ? CARRY_ON[formatOf(before, rules)] ?? 'normal' : 'normal';
     const format = cycle ? formatOf(cycle, rules) : carried;
-    if (format !== 'jailbreak' || !before) { jail = noJail(); breaks = [0, 0]; }
+    if (format !== 'jailbreak' || !before) { jail = noJail(match); breaks = [0, 0]; }
     if (index > 0) {
-      for (const t of [0, 1]) for (const seat of [0, 1, 2, 3]) if (lineups[index][t][seat] !== lineups[index - 1][t][seat]) jail[t][seat] = false;
+      for (const t of [0, 1]) for (const seat of allPlaces) if (lineups[index][t][seat] !== lineups[index - 1][t][seat]) jail[t][seat] = false;
     }
+    // The Split list the next question carries on. In a session (1.15.0) a ticked place stays on the set only while the same
+    // player sits there: one who leaves comes off it, and whoever arrives in that place is not on it.
+    const carriedSplit = () => {
+      const seats = before?.eligible?.map(list => [...list]) ?? null;
+      if (!session || !seats || index === 0) return seats;
+      return seats.map((list, t) => list.filter(seat => lineups[index][t][seat] === lineups[index - 1][t][seat]));
+    };
     const locker = format === 'doubleJump2' && before && formatOf(before, rules) === 'doubleJump1' && answered(before)
       ? controllingTeam(before) : null;
     const entry = {
       format,
-      eligible: format === 'split' ? (cycle ?? before)?.eligible?.map(seats => [...seats]) ?? null : null,
+      eligible: format === 'split' ? (cycle ? cycle.eligible?.map(seats => [...seats]) ?? null : carriedSplit()) : null,
       jailed: jail.map((seats, t) => seats.map((inJail, seat) => inJail && named[t].includes(seat))),
-      jailedOut: [0, 1].map(t => fullyJailed(jail, t)),
+      jailedOut: [0, 1].map(t => !session && fullyJailed(jail, t)),
       lockedOut: [0, 1].map(t => locker !== null && locker !== t),
     };
     if (cycle && format === 'jailbreak') {
-      for (const b of cycle.buzzes) if (isCorrect(b) && isTeam(b.team) && isSeat(b.seat)) jail[b.team][b.seat] = true;
+      for (const b of cycle.buzzes) if (isCorrect(b) && isTeam(b.team) && jailable.includes(b.seat)) jail[b.team][b.seat] = true;
       for (const t of breakOrder) {
-        const mayBreak = named[t].length === 4 || (rules.trivia.shortJail === 'noAdvantage' && breaks[t] < breaks[1 - t]);
-        if (mayBreak && fullyJailed(jail, t)) { jail[t] = [false, false, false, false]; breaks[t] += 1; }
+        const shortMay = rules.trivia.shortJail === 'noAdvantage' && breaks[t] < breaks[1 - t];
+        let breaksOut;
+        if (breakAll) breaksOut = fullyJailed(jail, t);
+        else if (session && full(t)) breaksOut = outCount(jail, t) >= 4;
+        else breaksOut = (named[t].length === 4 || shortMay) && fullyJailed(jail, t);
+        if (breaksOut) { jail[t] = jail[t].map(() => false); breaks[t] += 1; }
       }
     }
     prev = cycle;

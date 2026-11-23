@@ -1,19 +1,21 @@
 // Buzzer sessions on the Setup screen (Skor 1.12.0, SPEC-partB 6.4). A choice under the format, Game (4 a side) or Buzzer
-// session (up to 10 a side, practice), with Game the default; offered only where the format's rules fit it (not Consensus
-// or GradWrite, whose jail, Split and Streak rules are written around 4 seats). In a session each team shows 4 name boxes
-// and an Add player button that adds one more, up to 10; Other is never typed (the engine always puts it in place 10), and
-// a team may start with no named players. No bench boxes and no round are needed in a session (it has no QBJ file). The
-// pure parts here are tested without a screen; view-setup.js draws the boxes.
+// session (up to 10 a side, practice), with Game the default; offered for every format. Consensus and GradWrite were left out
+// in 1.12.0, since their Jailbreak and Split rules are written for 4 players, and added in 1.15.0 (Tom, 22 Nov 2026): in a
+// session Other is never jailed, a team breaks out when four named players are out (or every named player, a rule on the
+// Rules screen), and a Split set takes any number of a team's players (engine.js cycleEntries and checkSplitSeats). In a
+// session each team shows 4 name boxes and an Add player button that adds one more, up to 10; Other is never typed (the engine
+// always puts it in place 10), and a team may start with no named players. No bench boxes and no round are needed in a session
+// (it has no QBJ file). The pure parts here are tested without a screen; view-setup.js draws the boxes.
 
 import { h } from './dom.js';
 import { GAME_SEATS, NAMED_PLACES, isOtherName, OTHER_NAME_TEXT } from './session.js';
 
-export const SESSION_PRESETS = ['ukqb', 'acf', 'naqt-college', 'naqt-hs', 'pace', 'uc'];
+export const SESSION_PRESETS = ['ukqb', 'acf', 'naqt-college', 'naqt-hs', 'pace', 'uc', 'consensus', 'gradwrite'];
 export const GAME_LABEL = 'Game (4 a side)';
 export const SESSION_LABEL = 'Buzzer session (up to 10 a side, practice)';
 export const START_BOXES = 4;
 
-// Whether a format may be played as a session (never for a format with trivia rules).
+// Whether a format may be played as a session: any of the eight presets (not one cut in 2026, kept only in old matches).
 export const sessionOffered = presetId => SESSION_PRESETS.includes(presetId);
 
 // Whether the draft is a session now: chosen, and the format still allows it (a format change forces Game).

@@ -269,8 +269,8 @@ export function renderCycleEditor(root, state, api) {
     if (draft.format === 'split') {
       draft.eligible ??= [[], []];
       starter.push(...[0, 1].map(team => h('fieldset', { class: 'splitset' }, h('legend', {}, `${teamName(match, team)}: on this set`),
-        [0, 1, 2, 3].map(seat => check(seatName(team, seat) || `Seat ${seat + 1} (empty)`, draft.eligible[team].includes(seat), on => {
-          draft.eligible[team] = on ? [...draft.eligible[team], seat].sort() : draft.eligible[team].filter(s => s !== seat);
+        placesOf(team).map(seat => check(seatName(team, seat) || `Seat ${seat + 1} (empty)`, draft.eligible[team].includes(seat), on => {
+          draft.eligible[team] = on ? [...draft.eligible[team], seat].sort((a, b) => a - b) : draft.eligible[team].filter(s => s !== seat);
           redraw();
         }, { disabled: seatName(team, seat) === '' })))));
     }

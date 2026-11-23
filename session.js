@@ -36,6 +36,13 @@ export const OTHER_NAME = 'Other';
 
 export const isSession = match => match?.session === true;
 
+// Trivia rules in a session (1.15.0, Tom's answers of 22 Nov 2026). Only the named places go to jail in a Jailbreak, never
+// Other, which is several people. `trivia.sessionBreak` says when a team breaks out: 'four' when four of its named players are
+// out (the default, and what a rules record without the field means), 'all' when every named player sitting is out.
+export const SESSION_BREAKS = ['four', 'all'];
+export const jailPlaces = () => Array.from({ length: NAMED_PLACES }, (_, place) => place);
+export const sessionBreakOf = rules => (rules?.trivia?.sessionBreak === 'all' ? 'all' : 'four');
+
 // Other is on every team already, so no named player may be called it (any case, trimmed): refused in Add player and at setup.
 export const OTHER_NAME_TEXT = 'Other is already on every team. Use another name.';
 export const isOtherName = name => String(name ?? '').trim().toLowerCase() === OTHER_NAME.toLowerCase();

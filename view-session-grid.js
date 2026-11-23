@@ -33,10 +33,11 @@ export function sessionTeamGrid(c, team, column, info) {
     return h('button', {
       type: 'button', class: [on ? 'seat on' : 'seat', 'pl', cell.place === OTHER_PLACE ? 'other' : ''].filter(Boolean).join(' '),
       disabled: !can.on, 'aria-pressed': String(on), 'data-team': team, 'data-seat': cell.place,
-      'aria-label': filled ? `${teamName(match, team)}, ${cell.name}, ${cell.points} points` : `${teamName(match, team)}, place ${cell.place + 1}, empty`,
+      'aria-label': filled ? `${teamName(match, team)}, ${cell.name}${can.jailed ? ', out' : ''}, ${cell.points} points` : `${teamName(match, team)}, place ${cell.place + 1}, empty`,
       onclick: c.tap(() => api.setUi({ selected: on ? null : { team, seat: cell.place }, msg: '', streakN: 0, hint: null })),
     },
     h('span', { class: 'nm' }, filled ? [h('span', { class: 'key' }, cell.key), cell.name] : ''),
-    h('span', { class: 'pt' }, filled ? fmt(cell.points) : ''));
+    // In jail (1.15.0): "out" goes on the points line, where a long name cannot push it off a phone's narrow place.
+    h('span', { class: 'pt' }, filled ? (can.jailed ? `${fmt(cell.points)} · out` : fmt(cell.points)) : ''));
   }));
 }

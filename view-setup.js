@@ -37,6 +37,14 @@ const SIDE = ['A', 'B'];
 const DETAIL_FIELDS = [
   ['competition', 'Competition'], ['venue', 'Venue'], ['round', 'Round'], ['room', 'Room'], ['reader', 'Reader'], ['scorer', 'Scorer'],
 ];
+// A buzzer session also asks which packet is being read (1.15.0, Tom 22 Nov 2026: "i could put what tournament and packet we
+// are playing"), so each question's subject can be looked up later from its number. Free text, as "GradWrite Spring 2026, pack 11".
+// A game never shows it and its record never has the field; a packet loaded in Packet names itself and needs nothing typed.
+export const SESSION_DETAIL = ['packet', 'Packet played (set and number)'];
+export const detailFields = session => (session ? [...DETAIL_FIELDS, SESSION_DETAIL] : DETAIL_FIELDS);
+// The details a new match keeps: every box trimmed, and the session-only Packet box dropped from a game.
+export const detailsForMatch = (details, session) => Object.fromEntries(Object.entries(details)
+  .filter(([key]) => session || key !== SESSION_DETAIL[0]).map(([key, value]) => [key, String(value ?? '').trim()]));
 
 function freshDraft() {
   return {
@@ -315,7 +323,7 @@ function openedSection(draft, key, title, id, content, button) {
   return section;
 }
 
-const detailsContent = (draft, now, api, redraw) => h('div', { class: 'inner' }, h('div', { class: 'grid2' }, DETAIL_FIELDS.map(([key, text]) => {
+const detailsContent = (draft, now, api, redraw) => h('div', { class: 'inner' }, h('div', { class: 'grid2' }, detailFields(sessionOn(draft)).map(([key, text]) => {
   const input = h('input', { maxlength: 80, autocomplete: 'off', id: `detail-${key}` });
   input.value = draft.details[key] ?? '';
   input.addEventListener('input', () => { draft.details[key] = input.value; });
@@ -445,7 +453,7 @@ export function renderSetup(root, state, api) {
     const match = newMatch({
       rules: draft.rules,
       teams,
-      details: Object.fromEntries(Object.entries(draft.details).map(([key, value]) => [key, value.trim()])),
+      details: detailsForMatch(draft.details, session),
       id: newId(),
       now: api.now(),
       ...(session ? { session: true } : {}),

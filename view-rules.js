@@ -11,6 +11,8 @@ import { rulesFromPreset, presetUnverified } from './presets.js';
 import { defaultClockRules } from './clock.js';
 import { h } from './dom.js';
 import { ensureStyles, fmt, refusalText } from './view-common.js';
+import { isSession } from './session.js';
+import { sessionOn } from './view-setup-session.js';
 
 // ---- Style -----------------------------------------------------------------------------------
 
@@ -39,6 +41,9 @@ const CSS = `
   #rules-screen .inner { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
 `;
+
+// The buzzer-session Jailbreak rule's choices (1.15.0, engine.js cycleEntries).
+const SESSION_BREAK_CHOICES = [['four', 'Four named players are out'], ['all', 'Every named player is out']];
 
 // ---- Rule inputs (moved from view-setup.js for version 1.6.0) -------------------------------------
 
@@ -87,7 +92,7 @@ function checkField(rules, text, path, onChange) {
 
 function selectField(rules, text, path, options) {
   const select = h('select', {}, options.map(([value, name]) => h('option', { value }, name)));
-  select.value = getAt(rules, path);
+  select.value = getAt(rules, path) ?? options[0][0];   // a rule a record lacks shows its default (sessionBreak: 'four')
   select.addEventListener('change', () => setAt(rules, path, select.value));
   return h('label', { class: 'f' }, h('span', {}, text), select);
 }
@@ -184,7 +189,8 @@ function clockFields(rules) {
 
 // Every value of the rules as an input (spec 5, "the values a preset holds"), plus the trivia
 // values for Consensus and GradWrite (spec 5.1). Edits go straight into `rules`.
-export function rulesPanel(rules) {
+// `session` (1.15.0) adds the buzzer-session Jailbreak rule to the trivia group; a game never shows it.
+export function rulesPanel(rules, { session = false } = {}) {
   const panels = [];
 
   const musicNeg = pathNumber(rules, 'starterTypes.musicNeg', { neg: true, label: 'Music starter neg' });
@@ -230,8 +236,10 @@ export function rulesPanel(rules) {
       h('div', { class: 'grid2' },
         optionalNumber(rules, 'Streak (points an answer)', 'trivia.streak', 5, { min: 1, max: 100 }),
         selectField(rules, 'A short team under Jailbreak', 'trivia.shortJail', [['brick', 'Brick'], ['noAdvantage', 'No Advantage']]),
-        numberField(rules, 'Quarters', 'trivia.quarters', { min: 1, max: 8 })),
-      h('p', { class: 'hint' }, 'Brick: a short team never breaks jail. No Advantage: it breaks jail only as often as its opponents.')));
+        numberField(rules, 'Quarters', 'trivia.quarters', { min: 1, max: 8 }),
+        session ? selectField(rules, 'In this session a team breaks jail when', 'trivia.sessionBreak', SESSION_BREAK_CHOICES) : null),
+      h('p', { class: 'hint' }, 'Brick: a short team never breaks jail. No Advantage: it breaks jail only as often as its opponents.'),
+      session ? h('p', { class: 'hint' }, 'In a buzzer session Other is never out. A team with fewer than four named players follows the short team rule unless every named player frees it.') : null));
   }
 
   return h('div', { class: 'inner' }, panels);
@@ -272,10 +280,15 @@ const RULE_WORDS = [
   ['trivia.streak', 'Streak (points an answer)', orOff],
   ['trivia.shortJail', 'A short team under Jailbreak', named({ brick: 'Brick', noAdvantage: 'No Advantage' })],
   ['trivia.quarters', 'Quarters', fmt],
+  ['trivia.sessionBreak', 'In this session a team breaks jail when', value => named(Object.fromEntries(SESSION_BREAK_CHOICES))(value ?? 'four')],
 ];
 
-// A record from before version 2 has no clock rules; the screen fills in the defaults, which is not a change.
-const withClock = rules => ({ ...rules, clock: { ...defaultClockRules(), ...rules.clock } });
+// A record from before version 2 has no clock rules; the screen fills in the defaults, which is not a change. Trivia rules from
+// before 1.15.0 have no sessionBreak, which means 'four' (session.js sessionBreakOf), so that is filled in too.
+const withClock = rules => ({
+  ...rules, clock: { ...defaultClockRules(), ...rules.clock },
+  ...(rules.trivia ? { trivia: { sessionBreak: 'four', ...rules.trivia } } : {}),
+});
 const stable = value => JSON.stringify(value, (key, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v));
 
 // Whether `after` differs from `before` in anything at all.
@@ -317,7 +330,7 @@ export function renderRulesScreen(root, state, api) {
   const draft = state.ui.setup;
   const rules = onSetup ? draft.rules : (sub.draft ??= structuredClone(state.match.rules));
 
-  const panel = rulesPanel(rules);
+  const panel = rulesPanel(rules, { session: onSetup ? sessionOn(draft) : isSession(state.match) });
   const groups = [...panel.querySelectorAll('.group')];
   const keys = groups.map(section => section.dataset.group);
   if (!keys.includes(sub.group)) sub.group = keys[0];

@@ -18,6 +18,11 @@ const NO_STARTER_TYPES = { on: false, musicNeg: 0, pictureNeg: 0 };
 // Challenge's 26:00 game is from broadcasts (the gong at about 26 minutes), unverified for the trials.
 // Neither Consensus nor GradWrite has a game clock or a timeout limit (checked 16/10/2026).
 //
+// `trivia.sessionBreak` (1.15.0) applies only in a buzzer session, where the rulebooks' four on the buzzers become up to 10
+// named players and Other: 'four' frees a team once four named players are out, 'all' once every named player sitting is.
+// Both rulebooks free a team once all four players are out and cap a team at four on the buzzers (Consensus Rules Summary
+// 2026-27, Gameplay; GradWrite Gameplay Rules, Team Composition), so this is Tom's call of 22 Nov 2026, not a rulebook rule.
+//
 // The subs group (v2 4.1): `windows` lists when a swap is allowed, drawn from 'halftime', 'beforeOvertime',
 // 'timeout' (straight after one) and 'quarter', or null when unknown (no warning); `source` is the clause
 // shown in the warning. ACF C.12 (halftime, before overtime), NAQT D.4 (adds after a timeout) and PACE C.13
@@ -143,7 +148,7 @@ export const PRESETS = [
     overtime: 'none',
     atTime: 'finishCycle',
     etLabel: false,
-    trivia: { jackpot: [40, 30, 20, 10], streak: 5, shortJail: 'brick', quarters: 4 },
+    trivia: { jackpot: [40, 30, 20, 10], streak: 5, shortJail: 'brick', quarters: 4, sessionBreak: 'four' },
     clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: null, source: '' },
     subs: { windows: ['quarter'], source: 'the rulebook' },
   },
@@ -160,7 +165,7 @@ export const PRESETS = [
     overtime: 'suddenDeath',
     atTime: 'finishCycle',
     etLabel: false,
-    trivia: { jackpot: [30, 25, 15, 10], streak: null, shortJail: 'noAdvantage', quarters: 4 },
+    trivia: { jackpot: [30, 25, 15, 10], streak: null, shortJail: 'noAdvantage', quarters: 4, sessionBreak: 'four' },
     clock: { countdown: null, timeoutSeconds: 30, timeoutsPerTeam: null, source: '' },
     subs: { windows: ['quarter'], source: 'the rulebook' },
   },

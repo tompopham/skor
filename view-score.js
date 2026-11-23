@@ -25,7 +25,7 @@ import { renderRulesScreen } from './view-rules.js';
 import { protestFlow, throwOutFlow, boundsWords } from './view-protest.js';
 import { swapFlow } from './view-swap.js';
 import { playersFlow } from './view-players.js';
-import { isSession } from './session.js';
+import { isSession, screenPlaces, sessionBreakOf } from './session.js';
 import { sessionTeamGrid } from './view-session-grid.js';
 import { scoreHead, winMenuLine } from './view-win.js';
 import { menuModel, showMenu } from './view-menu.js';
@@ -238,23 +238,32 @@ function picker(c) {
   return null;
 }
 
-// A Split: tick one or two seats from each team, then OK. Asks again until the choice fits.
+// A Split: tick one or two seats from each team, then OK. Asks again until the choice fits. In a buzzer session (1.15.0)
+// the list is the team's shown places and Other, and any number may be ticked, at least one a team (Tom, 22 Nov 2026).
+export const SPLIT_WORDS = {
+  game: { ask: 'Tick one or two players from each team for this set. Only they may buzz.', again: 'Tick one or two players from each team.' },
+  session: { ask: 'Tick the players from each team on this set, at least one each. Only they may buzz. Other counts as one.', again: 'Tick at least one player from each team.' },
+};
+export const splitFits = (eligible, session) => eligible.every(seats => seats.length >= 1 && (session || seats.length <= 2));
 async function askSplit(c) {
   const { match, api } = c;
-  const boxes = [0, 1].map(team => [0, 1, 2, 3].map(seat => {
+  const session = isSession(match);
+  const words = SPLIT_WORDS[session ? 'session' : 'game'];
+  const places = team => (session ? screenPlaces(match, team) : [0, 1, 2, 3]);
+  const boxes = [0, 1].map(team => places(team).map(seat => {
     const named = c.who(team, seat) !== '';
     return check(named ? c.who(team, seat) : `Seat ${seat + 1} (empty)`, false, () => {}, { disabled: !named, 'data-team': team, 'data-seat': seat });
   }));
-  const body = [h('p', { class: 'dtext' }, 'Tick one or two players from each team for this set. Only they may buzz.'),
+  const body = [h('p', { class: 'dtext' }, words.ask),
     ...[0, 1].map(team => h('fieldset', { class: 'splitset' }, h('legend', {}, teamName(match, team)), boxes[team]))];
   const note = h('p', { class: 'msg' });
   body.push(note);
   for (;;) {
     const choice = await api.ask({ title: 'Split: who is on this set?', body, buttons: [{ label: 'OK', value: 'ok', primary: true }, { label: 'Cancel', value: 'cancel' }] });
     if (choice !== 'ok') return null;
-    const eligible = boxes.map(team => team.flatMap((label, seat) => (label.querySelector('input').checked ? [seat] : [])));
-    if (eligible.every(seats => seats.length >= 1 && seats.length <= 2)) return eligible;
-    note.textContent = 'Tick one or two players from each team.';
+    const eligible = boxes.map(team => team.flatMap(label => (label.querySelector('input').checked ? [Number(label.querySelector('input').dataset.seat)] : [])));
+    if (splitFits(eligible, session)) return eligible;
+    note.textContent = words.again;
   }
 }
 
@@ -301,8 +310,17 @@ const FORMAT_LINE = {
   split: 'Split: only the seats that are on this set may buzz',
 };
 
+// A session's Jailbreak line (1.15.0): how many named players each team has out, and what frees a team, so the scorer can call it.
+export function sessionJailLine(match, open) {
+  const out = team => (open.jailed?.[team] ?? []).filter(Boolean).length;
+  const rule = sessionBreakOf(match.rules) === 'all' ? 'all named free' : 'four frees';   // short: the line is one line wide
+  const [left, right] = leftRight(match);
+  return `Jailbreak: ${teamName(match, left)} ${out(left)} out, ${teamName(match, right)} ${out(right)} out (${rule})`;
+}
+
 function formatLine({ match, d }) {
   const { open } = d;
+  if (open.format === 'jailbreak' && isSession(match)) return sessionJailLine(match, open);
   if (open.format === 'jackpot') return `Jackpot: clue ${open.clue + 1} of ${match.rules.trivia.jackpot.length}, worth ${open.clueValue}`;
   if (open.format === 'streak') return `Streak: ${match.rules.trivia.streak} points an answer; a wrong or repeated answer scores 0`;
   return FORMAT_LINE[open.format] ?? `${FORMATS[open.format] ?? open.format}: ${match.rules.tossup.ten} points`;
