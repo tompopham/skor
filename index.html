@@ -211,6 +211,10 @@ html:has(.startbar) { scrollbar-gutter: stable; }   /* New match: a message abov
 .forgetrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
 .startbar.withforget { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: center; }   /* no row gap: the message above Start keeps its 6 px */
 .startbar.withforget #start-msg { flex: 1 0 100%; }
+.packetround { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin: 0 0 6px; font-size: 14px; }   /* 1.16.0: Round 4, packet 5 */
+.packetround[hidden] { display: none; }
+.packetround .msg { flex: 1 1 200px; }
+.startbar.withforget .packetround { flex: 1 0 100%; }
 .startbar.withforget #start-match { width: auto; flex: 1 1 0; }
 .startbar.withforget .forgetrow { flex: none; margin: 0; }
 /* One line from 640 px, cut short rather than wrapped, so a scroll bar's 15 px cannot push the page past Tom's window. */

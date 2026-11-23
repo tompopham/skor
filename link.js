@@ -32,14 +32,14 @@ export function sentRecord(match) {
   return record;
 }
 
-function toBase64Url(bytes) {
+export function toBase64Url(bytes) {
   let binary = '';
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 // The bytes, or null when the text cannot be base64url (a length of 4k + 1 never can).
-function fromBase64Url(text) {
+export function fromBase64Url(text) {
   if (text.length % 4 === 1) return null;
   try {
     const binary = atob(text.replace(/-/g, '+').replace(/_/g, '/'));
@@ -50,7 +50,8 @@ function fromBase64Url(text) {
 }
 
 // Runs bytes through a compression or decompression stream and joins what comes out, stopping past `limit` bytes.
-async function pipe(bytes, stream, limit = Infinity) {
+// Shared with schedule-link.js (the afternoon link, 1.16.0).
+export async function pipe(bytes, stream, limit = Infinity) {
   const reader = new Blob([bytes]).stream().pipeThrough(stream).getReader();
   const chunks = [];
   let size = 0;

@@ -13,6 +13,8 @@ import { h, newId } from './dom.js';
 import { isLive, isIosSafariTab } from './view-common.js';
 import { isMatchLink, readLink } from './link.js';
 import { sendDialog, offerLink, showSent, askToSave } from './view-send.js';
+import { isScheduleLink, readScheduleLink } from './schedule-link.js';
+import { offerSchedule, showSchedule } from './view-schedule.js';
 import { winDialog } from './view-win.js';
 import { renderSetup } from './view-setup.js';
 import { renderScore } from './view-score.js';
@@ -32,10 +34,13 @@ import { VERSION } from './version.js';
 // about it unless it is also the match in progress. state.peek: the match is a sent one that Just look opened (SPEC-partB
 // 1.4); it is not saved here, so nothing may change it until it is. START is the page's first screen: the room board when
 // the address ends in #board (the scorer's Room board menu item opens a window like that), otherwise Home. SENT is a sent
-// match's link the page was opened with (SPEC-partB 1.3); its # part leaves the address as the page opens (below), so
-// neither back, forward nor a reload offers the match twice, and the match is held here until the person chooses.
+// match's link the page was opened with (SPEC-partB 1.3), or an afternoon schedule's (1.16.0, 7.5); its # part leaves the
+// address as the page opens (below), so neither back, forward nor a reload offers it twice, and it is held here until the
+// person chooses.
 const START = location.hash === '#board' ? 'board' : 'home';
-const SENT = isMatchLink(location.hash) ? location.href : null;
+const SENT = isMatchLink(location.hash) || isScheduleLink(location.hash) ? location.href : null;
+// A link opened: an afternoon schedule's (#s1.) or a sent match's (#m1.).
+const offerAnyLink = link => (isScheduleLink(link) ? offerSchedule(link, api) : offerLink(link, api));
 const state = { screen: START, match: null, history: null, ui: {}, enteredAt: 0, subClosedAt: null, foreign: false, viewOnly: false, peek: false };
 const noteSubClose = patch => { if (state.ui.sub && patch && 'sub' in patch && !patch.sub) state.subClosedAt = performance.now(); };
 const KEEP_UI = ['setup'];
@@ -50,7 +55,7 @@ const BACKUP_EVERY = 5;
 const VIEWS = { home: renderHome, setup: renderSetup, score: renderScore, sheet: renderSheet, past: renderPast, board: renderBoard };
 
 const api = {
-  go, back, dispatch, dispatchAll, startMatch, setUi, closeSub, ask, undo, redo, setDisplay, editCycle,
+  go, back, dispatch, dispatchAll, startMatch, setUi, closeSub, ask, undo, redo, setDisplay, setDetails, editCycle,
   keepAwake, wakeStatus, offerBackup, viewMatch, resumeSaved, deleteSaved, updateReady, applyUpdate, now, lookAt, askForPersistentStorage,
   sendMatch: () => sendDialog(state.match, api),
   winDialog: () => winDialog(api, state.match),
@@ -336,13 +341,14 @@ function dispatch(action, uiPatch) {
 
 // Undo and redo hand back an earlier record, which is saved as a new change: its rev is one past the
 // last one saved here, so a rev never repeats with different content (R27). The display settings
-// are not part of the history, so they stay as they are now.
+// are not part of the history, so they stay as they are now; nor are Match details (1.16.0), which change after Start only
+// by setDetails.
 function stepHistory(step) {
   if (!state.match || state.foreign || state.peek) return false;
   const restored = step();
   if (!restored) return false;
   Object.assign(state.ui, { msg: '', hint: null, selected: null, streakN: 0 });
-  commit({ ...restored, display: state.match.display, rev: state.match.rev + 1, changedAt: now() });
+  commit({ ...restored, display: state.match.display, details: state.match.details, rev: state.match.rev + 1, changedAt: now() });
   return true;
 }
 function undo() {
@@ -350,6 +356,14 @@ function undo() {
 }
 function redo() {
   return stepHistory(() => state.history.redo());
+}
+
+// Match details changed after Start (1.16.0: Change Round in the Save QBJ dialog, SPEC-partB 7.7). Saved as a change, as
+// the display settings are, but not a version to undo, and undo keeps them. False for a match only being looked at.
+function setDetails(patch) {
+  if (!state.match || state.foreign || state.peek || state.viewOnly) return false;
+  commit({ ...state.match, details: { ...state.match.details, ...patch }, rev: state.match.rev + 1, changedAt: now() });
+  return true;
 }
 
 // Swap sides and Reverse seat order. Display settings never change the scores, so they are saved
@@ -609,14 +623,14 @@ try {
 // device could not save is not lost: its # part leaves the new entry the browser made for it, which becomes this screen's.
 window.addEventListener('hashchange', () => {
   if (location.hash === '#board' && state.screen !== 'board') { location.reload(); return; }
-  if (!isMatchLink(location.hash)) return;
+  if (!isMatchLink(location.hash) && !isScheduleLink(location.hash)) return;
   const link = location.href;
   try {
     history.replaceState(entry(state.screen), '', `${location.pathname}${location.search}`);
   } catch {
     // The address keeps it; the match is offered all the same.
   }
-  offerLink(link, api);
+  offerAnyLink(link);
 });
 
 // Leaving the room board for another screen: the address loses its #board, on the entry it is in.
@@ -873,6 +887,13 @@ async function pasteBackup() {
     });
     if (choice !== 'load') return;
     text = box.value;
+    // An afternoon schedule's link (1.16.0, 7.5), as a match's: a damaged one keeps the dialog open with its error.
+    if (isScheduleLink(text) && !text.trim().startsWith('{')) {
+      const read = await readScheduleLink(text);
+      if (read.ok) return showSchedule(read.afternoon, read.link, api);
+      error = read.error;
+      continue;
+    }
     if (isMatchLink(text) && !text.trim().startsWith('{')) {
       const sent = await readLink(text);
       if (sent.ok) return showSent(sent.match, sent.link, api);
@@ -946,4 +967,4 @@ function renderHome(root, state) {
 }
 
 render();
-if (SENT) offerLink(SENT, api);
+if (SENT) offerAnyLink(SENT);

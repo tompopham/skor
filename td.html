@@ -35,6 +35,14 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 .about { max-width: 640px; margin: 0 0 12px; }
 .step, .job { border: 1px solid var(--line); padding: 10px; display: grid; gap: 8px; margin-bottom: 8px; min-width: 0; }
 .acts { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Add a schedule (1.16.0): 16 px in the box, so an iPhone does not zoom in on it. */
+.sched { display: grid; gap: 8px; min-width: 0; }
+.sched .f { font-weight: bold; font-size: 14px; }
+#schedule-text { font-size: 16px; min-height: 160px; white-space: pre; overflow-wrap: normal; overflow-x: auto; }
+.faults { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 14px; }
+.faults:empty { display: none; }
+.faults li { overflow-wrap: anywhere; }
+.faults li.head { list-style: none; margin-left: -20px; font-weight: bold; }
 .status { font-size: 14px; margin: 0; overflow-wrap: anywhere; }
 .report { display: grid; gap: 8px; min-width: 0; }
 .report ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
@@ -52,6 +60,21 @@ thead th { background: var(--btn); }
 .grid td.none { color: var(--offfg); }
 .grid td.gap, .grid td.double { font-weight: bold; }
 .grid .note { display: block; font-weight: normal; }
+/* Standings and afternoon brackets (1.16.0). One column that never grows past the page: a select is as wide as its longest
+   choice, and a table scrolls inside its own box. */
+#standings { grid-template-columns: minmax(0, 1fr); }
+.pick { width: 100%; }
+.pick { font: inherit; font-size: 16px; min-height: 44px; border: 1px solid var(--line); border-radius: 0; background: var(--bg); color: var(--fg); max-width: 100%; }
+.pickrow { display: grid; gap: 4px; font-size: 14px; min-width: 0; }
+.pickrow span { font-weight: bold; }
+.rulepick { max-width: 480px; }
+.choice { display: grid; gap: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
+.choice:first-of-type { border-top: 0; padding-top: 0; }
+.swap { border: 1px solid var(--line); padding: 10px; display: grid; gap: 8px; }
+.swaprow { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.ask { border: 1px solid var(--fg); padding: 10px; display: grid; gap: 8px; }
+.standings td.gap { font-weight: bold; }
+#standings .tablewrap + .tablewrap { margin-top: 8px; }
 body.dropping .shell { outline: 2px dashed var(--fg); outline-offset: -4px; }
 @page { size: A4 landscape; margin: 10mm; }
 @media print {
@@ -77,6 +100,16 @@ body.dropping .shell { outline: 2px dashed var(--fg); outline-offset: -4px; }
 <input type="file" id="tournament-file" accept=".qbj,.json,application/json" hidden>
 <p class="status" id="tournament-status" role="status" aria-live="polite">No tournament file loaded.</p>
 <p class="msg" id="tournament-error" role="alert"></p>
+<div class="acts"><button class="btn" type="button" id="add-schedule" aria-expanded="false" aria-controls="schedule-box">Add a schedule</button></div>
+<div class="sched" id="schedule-box" hidden>
+<p class="hint">Before the day: paste the schedule from your spreadsheet, one row a game: Round, Room, Team, Team, and a fifth column, Bracket, if you name the afternoon brackets. A team not known until the morning is played is a slot: A1 is pool A's 1st place. A header row is skipped. Pools are worked out from the morning games, or set them with rows such as Pool A, then its teams.</p>
+<label class="f" for="schedule-text">Schedule table</label>
+<textarea id="schedule-text" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+<p class="status" id="schedule-status" role="status" aria-live="polite"></p>
+<ul class="faults" id="schedule-faults"></ul>
+<div class="acts"><button class="btn" type="button" id="save-schedule">Save tournament file with schedule</button></div>
+<p class="msg" id="schedule-msg" role="alert"></p>
+</div>
 </section>
 
 <section class="step noprint" id="step2" aria-labelledby="step2-title">
@@ -93,6 +126,8 @@ body.dropping .shell { outline: 2px dashed var(--fg); outline-offset: -4px; }
 </section>
 
 <section class="report" id="report" hidden></section>
+
+<section class="report" id="standings" aria-labelledby="standings-title" hidden></section>
 
 <p class="hint" id="version"></p>
 <noscript><p>This page needs JavaScript. Turn it on for this site and reload.</p></noscript>

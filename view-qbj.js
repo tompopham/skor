@@ -6,17 +6,21 @@ import { derive } from './engine.js';
 import { offerFile } from './files.js';
 import { h } from './dom.js';
 import { qbjText, qbjFileName, qbjRound } from './qbj.js';
+import { matchPacket, roundPacketWarning } from './packet-match.js';
 
 export const QBJ_USE = 'For YellowFruit (File, QBJ Schema, Import Games Only) and buzzpoints.org.';
 export const QBJ_TWICE = 'buzzpoints.org counts every game uploaded, so one uploaded twice counts twice: delete the old upload first.';
 export const QBJ_NO_ROUND = 'No round was typed, so the file has none inside. YellowFruit takes it only from the round’s own Import button (Games, the round); buzzpoints.org reads the first number in the file name as the round, so put the round at the start, as R03.';
 
 // The dialog's lines for a match, for the page and the tests: whether it has ended, the file name, and the round note.
+// `packetRound` (1.16.0, SPEC-partB 7.7) is there only when Round and the packet's number differ.
 export function qbjWords(match, d = derive(match)) {
+  const packetRound = roundPacketWarning(match.details?.round, matchPacket(match)?.ref);
   return {
     notEnded: d.phase.ended ? null : 'This match has not ended.',
     name: qbjFileName(match),
     noRound: qbjRound(match) === null ? QBJ_NO_ROUND : null,
+    ...(packetRound ? { packetRound } : {}),
   };
 }
 
@@ -43,6 +47,15 @@ export function qbjDialog(state, api) {
       busy = false;
     }
   };
+  // Round 4 read packet 5 (7.7): one line, and a button that changes the match's Round, so the file and its name say 5.
+  const changeRound = async () => {
+    const warning = roundPacketWarning(state.match.details?.round, matchPacket(state.match)?.ref);
+    if (!warning) return;
+    if (!api.setDetails({ round: String(warning.packet) })) { say('This match is only being looked at here: resume it to change its round.', true); return; }
+    document.getElementById('qbj-name').textContent = qbjFileName(state.match);
+    document.getElementById('qbj-packet-round')?.remove();
+    say(`Round changed to ${warning.packet}.`);
+  };
   return api.ask({
     title: 'Save QBJ file',
     body: [
@@ -50,6 +63,8 @@ export function qbjDialog(state, api) {
       h('p', { class: 'dtext', id: 'qbj-use' }, QBJ_USE),
       h('p', { class: 'dtext qbjname', id: 'qbj-name' }, words.name),
       words.noRound ? h('p', { class: 'hint', id: 'qbj-no-round' }, words.noRound) : null,
+      words.packetRound ? h('div', { class: 'stack', id: 'qbj-packet-round' }, h('p', { class: 'msg' }, words.packetRound.text),
+        h('button', { type: 'button', class: 'btn', id: 'qbj-change-round', onclick: changeRound }, words.packetRound.change)) : null,
       h('p', { class: 'hint', id: 'qbj-twice' }, QBJ_TWICE),
       h('div', { class: 'stack' }, h('button', { type: 'button', class: 'btn primary', id: 'qbj-save', onclick: save }, 'Save QBJ file')),
       status,

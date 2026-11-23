@@ -9,6 +9,7 @@
 
 import { h } from './dom.js';
 import { GAME_SEATS, NAMED_PLACES, isOtherName, OTHER_NAME_TEXT } from './session.js';
+import { withoutPicked } from './schedule.js';
 
 export const SESSION_PRESETS = ['ukqb', 'acf', 'naqt-college', 'naqt-hs', 'pace', 'uc', 'consensus', 'gradwrite'];
 export const GAME_LABEL = 'Game (4 a side)';
@@ -61,6 +62,8 @@ export function modeChoice(draft, redraw) {
       onclick: () => {
         if (on) return;
         draft.session = value === 'session';
+        // A session has no round (7.4): a Round and Room the schedule put in go, unless typed since (1.16.0 review fix).
+        if (draft.session && draft.details) draft.details = withoutPicked(draft.details, draft.picked ?? null);
         redraw();
         document.getElementById(`setup-mode-${value}`)?.focus();   // the screen is drawn again: keep the keyboard on the choice
       },

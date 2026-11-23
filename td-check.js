@@ -197,8 +197,51 @@ export function readGame(path, text) {
   return {
     path,
     kind: 'game',
-    game: { path, round: { folder: roundFromFolder(path), fileName: roundFromFileName(path), inside, insideText }, sides, print: fingerprint(body) },
+    game: { path, round: { folder: roundFromFolder(path), fileName: roundFromFileName(path), inside, insideText }, sides, print: fingerprint(body), stats: gameStats(data) },
   };
+}
+
+// What YellowFruit 4.0.18 adds up from a game file for its standings (1.16.0, SPEC-partB 7.6; read in its code 22 and 23 Nov
+// 2026: StatSummaries.ts PoolTeamStats.addMatchTeam, MatchTeam.ts, MatchPlayer.ts and FileParsing.ts parseMatchTeam), so the
+// TD check page's standings match its screen. For each side, in the file's order: points, the file's own `points` if it has
+// them (Skor and MODAQ write none), else tossup points (each answer's value times its number, over every player) plus
+// bonus_points, bonus_bounceback_points and lightning_points; bonus points, which is points less tossup, bounce-back and
+// lightning points; bonuses heard, the side's answers worth more than 0; the same two from overtime (YellowFruit's own
+// YfData.overTimeBuzzes, which Skor writes for a match that went to overtime); and a forfeit. A number that is not one
+// counts 0, as YellowFruit's `|| 0` does. The match's tossups read (null when the file gives none: YellowFruit then takes the
+// regulation count) and overtime tossups read go with them.
+const count = value => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+function answerSums(counts) {
+  let points = 0;
+  let positive = 0;
+  for (const entry of list(counts)) {
+    const value = count((entry?.answer_type ?? entry?.answerType)?.value);
+    const number = count(entry?.number);
+    points += value * number;
+    if (value > 0) positive += number;
+  }
+  return { points, positive };
+}
+export function gameStats(data) {
+  const sides = list(data?.match_teams).map(side => {
+    let tossupPoints = 0;
+    let heard = 0;
+    for (const entry of list(side?.match_players)) {
+      const sums = answerSums(entry?.answer_counts);
+      tossupPoints += sums.points;
+      heard += sums.positive;
+    }
+    const overtime = answerSums(side?.YfData?.overTimeBuzzes);
+    const bounce = count(side?.bonus_bounceback_points);
+    const lightning = count(side?.lightning_points);
+    const points = typeof side?.points === 'number' && Number.isFinite(side.points) ? side.points : tossupPoints + count(side?.bonus_points) + bounce + lightning;
+    return {
+      points, tossupPoints, bonusPoints: points - tossupPoints - bounce - lightning, bonusesHeard: heard,
+      overtimePoints: overtime.points, overtimeHeard: overtime.positive, forfeit: side?.forfeit_loss === true,
+    };
+  });
+  const read = data?.tossups_read;
+  return { tossupsRead: typeof read === 'number' && Number.isFinite(read) ? read : null, overtimeRead: count(data?.overtime_tossups_read), sides };
 }
 
 // The tournament file (step 1), in any of the three shapes MODAQ reads (SPEC-partB 3.4): { version, objects: [Tournament] },
@@ -212,7 +255,9 @@ export function readTournament(text) {
   try { return tournamentFrom(data); } catch { return error('This file could not be read as a tournament file: it is not laid out as one.'); }
 }
 
-function tournamentFrom(data) {
+// The parsed file's Tournament object (null for a bare list of registrations or registrations alone), its registrations,
+// and `deref`, which follows a { $ref } to the object with that id. Shared with schedule.js, which reads the phases.
+export function locateTournament(data) {
   const ids = new Map();
   const collect = value => {
     if (Array.isArray(value)) value.forEach(collect);
@@ -234,6 +279,11 @@ function tournamentFrom(data) {
     tournament = data;
     registrations = list(data.registrations);
   }
+  return { tournament, registrations, deref };
+}
+
+function tournamentFrom(data) {
+  const { tournament, registrations, deref } = locateTournament(data);
   const teams = [];
   for (const registration of registrations.map(deref)) {
     for (const team of list(registration?.teams).map(deref)) {

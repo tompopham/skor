@@ -20,8 +20,9 @@
 
 import { PRESETS, DEFAULT_PRESET_ID, rulesFromPreset, presetUnverified } from './presets.js';
 import { newMatch } from './engine.js';
-import { forgetRoster, loadPacket, loadRoster, saveRoster } from './storage.js';
-import { packetAllowed, packetForMatch } from './packet-match.js';
+import { forgetRoster, listMatches, listPackets, loadMatch, loadPacket, loadRoster, saveRoster } from './storage.js';
+import { offScheduleLine, scheduledGame, nextPick } from './schedule.js';
+import { packetAllowed, packetForMatch, roundPacketWarning } from './packet-match.js';
 import { packetContent, packetOffered, packetStatus } from './view-packet.js';
 import { h, newId } from './dom.js';
 import { renderRulesScreen, rulesDiffer } from './view-rules.js';
@@ -29,7 +30,7 @@ import { ratingMarks } from './view-win.js';
 import { roundProblem } from './tournament.js';
 import { sessionOffered, sessionOn, shownSeats, addSeatBox, sessionSeats, sessionRoster, modeChoice, otherNameProblem, START_BOXES } from './view-setup-session.js';
 import { NAMED_PLACES } from './session.js';
-import { tournamentNow, tournamentStatus, tournamentRow, teamList, teamPicker } from './view-tournament.js';
+import { tournamentNow, tournamentStatus, tournamentRow, teamList, teamPicker, schedulePickers } from './view-tournament.js';
 
 // ---- Small helpers -------------------------------------------------------------------------
 
@@ -182,7 +183,8 @@ function formatSelect(draft, onPick) {
 // A team card (review change 3): no labels over the boxes. Row 0 is the team name, in bold, and the Bench button; rows 1 to 4
 // are the seats, each with its number in a narrow gutter (it stays in view after a name is typed). The Bench button shows how
 // many bench names are typed, and opens the bench boxes under the seats. `changed` is told when the boxes Enter walks change.
-function teamCard(draft, t, rosterId, changed, now) {
+// `offLine` (1.16.0): the card's "Not the scheduled game" line and the function that redraws it, or null with no schedule.
+function teamCard(draft, t, rosterId, changed, now, offLine = null) {
   const team = draft.teams[t];
   const session = sessionOn(draft);   // 1.12.0: up to 10 name boxes and no bench
   const side = t === 0 ? 'Left' : 'Right';
@@ -298,12 +300,12 @@ function teamCard(draft, t, rosterId, changed, now) {
   // A pick from the list may come on some browsers only as a change, so a change decides a name the typing did not; it
   // never decides the same name again, which would redraw the line (and its offer button) as the box loses focus.
   let decided = null;
-  const decide = () => { decided = name.value; team.name = name.value; picker.onName(name.value); };
+  const decide = () => { decided = name.value; team.name = name.value; picker.onName(name.value); offLine?.show(); };
   name.addEventListener('input', decide);
   name.addEventListener('change', () => { if (name.value !== decided) decide(); });
 
   return h('div', { class: 'card tcard' }, h('h2', {}, `${side} team`),
-    h('div', { class: 'trow' }, gutter(''), name, session ? null : benchButton), picker.line, seatHolder, addPlayer, warning, marks.line, session ? null : benchBlock);
+    h('div', { class: 'trow' }, gutter(''), name, session ? null : benchButton), picker.line, offLine?.node ?? null, seatHolder, addPlayer, warning, marks.line, session ? null : benchBlock);
 }
 
 // A section after the teams that shows only when its button in the top bar has opened it (Rules, Match details). The
@@ -329,6 +331,24 @@ const detailsContent = (draft, now, api, redraw) => h('div', { class: 'inner' },
   input.addEventListener('input', () => { draft.details[key] = input.value; });
   return h('label', { class: 'f' }, h('span', {}, text), input);
 })), tournamentRow(now, api, redraw));
+
+// A fresh draft after a match starts in the same room in the next round of the schedule (1.16.0, SPEC-partB 7.4): Round,
+// Room and the two teams, whose players the cards then fill. Only with a schedule, after a game (not a session) changed in
+// the last 12 hours; anything that cannot be read leaves the draft as it is.
+function preselected(draft, now, at) {
+  const schedule = now.tournament?.schedule;
+  if (!schedule) return draft;
+  try {
+    const newest = listMatches()[0];
+    const pick = newest ? nextPick(schedule, loadMatch(newest.id), at) : null;
+    if (!pick) return draft;
+    draft.details.round = pick.round;
+    draft.details.room = pick.room;
+    pick.teams?.forEach((name, t) => { draft.teams[t].name = name; });
+    draft.picked = { round: pick.round, room: pick.room, teams: pick.teams ? [...pick.teams] : [null, null] };
+  } catch { /* the draft stays empty */ }
+  return draft;
+}
 
 // What Start makes of the draft: blank team names become Team A and Team B, and a team with no
 // names typed gets seats A1 to A4 (B1 to B4), as the bare-bones page did. The bench is the names typed in its
@@ -379,12 +399,21 @@ function forgetRow(api, now, redraw) {
 }
 
 export function renderSetup(root, state, api) {
-  if (!state.ui.setup) api.setUi({ setup: freshDraft() }, false);
+  const now = tournamentNow();
+  if (!state.ui.setup) api.setUi({ setup: preselected(freshDraft(), now, api.now()) }, false);
   const draft = state.ui.setup;
   if (state.ui.sub?.kind === 'rules') { renderRulesScreen(root, state, api); return; }
 
   const rosterId = 'roster-names';
-  const now = tournamentNow();
+  // The schedule (1.16.0): Round and Room pickers above the team cards, and under each card a line when its team is not
+  // one of the scheduled game's. Not in a buzzer session, which has no round (7.4).
+  const schedule = sessionOn(draft) ? null : now.tournament?.schedule ?? null;
+  const offLines = [0, 1].map(t => {
+    const node = h('p', { class: 'hint tline', id: `team${t}-scheduled` });
+    return { node, show: () => { node.textContent = schedule ? offScheduleLine(scheduledGame(schedule, draft.details.round, draft.details.room), draft.teams[t].name) : ''; } };
+  });
+  offLines.forEach(line => line.show());
+  const pickers = schedule ? schedulePickers(now, draft) : null;
   const redraw = () => api.setUi({});
   const roster = h('datalist', { id: rosterId }, loadRoster().map(name => h('option', { value: name })));
 
@@ -423,8 +452,26 @@ export function renderSetup(root, state, api) {
   // round must be a whole number first (YellowFruit files the game by it): Match details opens at the Round box.
   // The message sits above Start, so the button keeps its place at the foot of the bar; it goes once the round will do.
   const startMsg = h('p', { class: 'msg', id: 'start-msg', role: 'status' });
+  // Round 4 with packet 5 chosen (1.16.0, SPEC-partB 7.7): one line above Start, which never blocks, and a button that
+  // changes Round as typing would.
+  const packetRound = h('div', { class: 'packetround', id: 'packet-round', role: 'status' });
+  const showPacketRound = () => {
+    const chosen = draft.packetId && packetAllowed(draft.rules) && !sessionOn(draft) ? listPackets().find(p => p.id === draft.packetId) : null;
+    const warning = chosen ? roundPacketWarning(draft.details.round, chosen) : null;
+    packetRound.replaceChildren(...(warning ? [h('span', { class: 'msg' }, warning.text), h('button', {
+      type: 'button', class: 'btn small', id: 'change-round',
+      onclick: () => {
+        const box = document.getElementById('detail-round');
+        if (box) { box.value = String(warning.packet); box.dispatchEvent(new Event('input', { bubbles: true })); } else { draft.details.round = String(warning.packet); showPacketRound(); }
+      },
+    }, warning.change)] : []));
+    packetRound.hidden = !warning;
+  };
+  showPacketRound();
   detailsSection.addEventListener('input', event => {
+    if (event.target.id === 'detail-round') showPacketRound();
     if (event.target.id === 'detail-round' && !roundProblem(draft.details.round, now.tournament, draft.rules, sessionOn(draft))) startMsg.textContent = '';
+    if (event.target.id === 'detail-round' || event.target.id === 'detail-room') { offLines.forEach(line => line.show()); pickers?.sync(); }
   });
   function startFromDraft() {
     const session = sessionOn(draft);
@@ -475,10 +522,12 @@ export function renderSetup(root, state, api) {
     modeChoice(draft, redraw),
     tournamentStatus(now),
     packetStatus(draft),
-    h('div', { class: 'grid2 tcards' }, teamCard(draft, 0, rosterId, () => keyLabels(), now), teamCard(draft, 1, rosterId, () => keyLabels(), now)),
+    pickers?.node ?? null,
+    h('div', { class: 'grid2 tcards' }, teamCard(draft, 0, rosterId, () => keyLabels(), now, schedule ? offLines[0] : null),
+      teamCard(draft, 1, rosterId, () => keyLabels(), now, schedule ? offLines[1] : null)),
     detailsSection,
     packetSection,
-    h('div', { class: wide ? 'startbar withforget' : 'startbar' }, startMsg, start, wide ? forget : null),
+    h('div', { class: wide ? 'startbar withforget' : 'startbar' }, packetRound, startMsg, start, wide ? forget : null),
     h('p', { class: 'hint', id: 'setup-hint' }, sessionOn(draft)
       ? 'Names are saved on this device for next time. A team may start with no names: everyone is then on Other, which is always there.'
       : 'Names are saved on this device for next time. A team with no names gets seats A1 to A4 (B1 to B4).'),

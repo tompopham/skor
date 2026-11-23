@@ -34,6 +34,32 @@ export const packetForMatch = kept => ({
   tossups: kept.tossups, bonuses: kept.bonuses,
 });
 
+// The packet's number (1.16.0, SPEC-partB 7.7): qbreader's packet number; else a number named as one in the packet file's
+// name ("Packet 05", "Round_3", "R3"); else the first run of digits followed by _, a space, . or the end (section 3.6's rule,
+// buzzpoints.org's). Null for none, or one outside 1 to 999 ("Fall 2025.docx" is not packet 2025). Claude's call: the named
+// number first, as 3.6's rule alone reads "ACF Winter 2025 - Packet 05" as packet 2025.
+export function packetNumberOf(ref) {
+  if (Number.isInteger(ref?.packetNumber) && ref.packetNumber >= 1 && ref.packetNumber <= 999) return ref.packetNumber;
+  const name = String(ref?.fileName ?? ref?.name ?? '').replace(/\.(json|qbj|docx|txt)$/i, '');
+  // "Packet" before "Round": "Round 3 Packet 7" is packet 7 (fixed after the stage 4 review).
+  const found = /(?:^|[^A-Za-z])packet\.?[\s_-]*(\d+)(?!\d)/i.exec(name) ?? /(?:^|[^A-Za-z])(?:round|rd|r)\.?[\s_-]*(\d+)(?!\d)/i.exec(name)
+    ?? /(\d+)(?=[_ .]|$)/.exec(name);
+  const number = found ? Number(found[1]) : NaN;
+  return number >= 1 && number <= 999 ? number : null;
+}
+
+// The round-vs-packet warning (7.7): when Round is a number and the packet has one and they differ, { round, packet, text,
+// change }: "Round 4, but this is packet 5. Round 4 usually reads packet 4." and "Change Round to 5". QBJ assumes the same
+// pairing (Round.packets, quizbowl/schema). Null otherwise: it never blocks, and says nothing for a packet with no number.
+export function roundPacketWarning(round, ref) {
+  const typed = String(round ?? '').trim();
+  if (!/^\d{1,3}$/.test(typed) || Number(typed) < 1) return null;
+  const packet = packetNumberOf(ref);
+  const n = Number(typed);
+  if (packet === null || packet === n) return null;
+  return { round: n, packet, text: `Round ${n}, but this is packet ${packet}. Round ${n} usually reads packet ${n}.`, change: `Change Round to ${packet}` };
+}
+
 // A word: a whole number from 0. The end-of-question slot is checked where the text is known ('word' below; the pane
 // offers no other).
 export const isWord = word => Number.isInteger(word) && word >= 0;

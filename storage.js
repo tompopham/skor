@@ -21,6 +21,7 @@ export const KEYS = {
   tournament: 'scorer.tournament',   // the tournament file loaded on Setup (SPEC-partB 0.3 and 3.4), as its text
   packets: 'scorer.packets',      // packet mode's list of packets ready on this device (SPEC-partB 0.3 and 5.2); each is scorer.packet.<id>
   qbsets: 'scorer.qbsets',        // packet mode: qbreader's set names, kept after the first fetch for the suggestions (SPEC-partB 5.2)
+  tdRule: 'scorer.tdrule',        // the TD check page's tie rule for the standings (SPEC-partB 7.6): 'ppb', 'p20' or 'h2h'
 };
 const MATCH_PREFIX = 'scorer.match.';
 export const matchKey = id => `${MATCH_PREFIX}${id}`;
@@ -470,4 +471,13 @@ export function mergeDecision(existing, incoming) {
 export function detectForeignChange(lastSavedRev, storedMatch) {
   const stored = storedMatch?.rev;
   return Number.isFinite(stored) && Number.isFinite(lastSavedRev) && stored > lastSavedRev;
+}
+
+// The TD check page's tie rule (1.16.0, SPEC-partB 7.6), kept on the device so the TD picks it once. Null when none is kept
+// or the store cannot be read; saving says whether it stuck, and the page works the same either way.
+export function loadTdRule(store = defaultStore()) {
+  try { return store.getItem(KEYS.tdRule); } catch { return null; }
+}
+export function saveTdRule(rule, store = defaultStore()) {
+  try { store.setItem(KEYS.tdRule, String(rule)); return true; } catch { return false; }
 }

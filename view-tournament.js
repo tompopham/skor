@@ -4,6 +4,8 @@
 
 import { readSavedTournament, saveTournamentFile, tournamentLine, findTeam, rosterSeats, fillPlan, NOT_IN_TOURNAMENT } from './tournament.js';
 import { removeTournamentText } from './storage.js';
+import { roundChoices, roomChoices, scheduledGame, pickerPlan, roundNumber } from './schedule.js';
+import { field, ensureStyles } from './view-common.js';
 import { h } from './dom.js';
 
 // A tournament file is about 20 KB; anything far bigger is not one, and is not read.
@@ -123,10 +125,63 @@ export function teamPicker(now, draftTeam, fill, boxes, size = 4) {
     const plan = fillPlan(boxes(), registered, previous && previous.name === draftTeam.fromTournament ? previous : null, size);
     if (plan === 'fill') use(registered);
     else if (plan === 'ask') show('In the tournament file.', registered);
-    else show('');
+    else {
+      // A team kept with no players (names only, from an afternoon link) is known, so it gets no mark, and nothing is filled.
+      if (!registered.players.length) draftTeam.fromTournament = registered.name;
+      show('');
+    }
   };
   // Drawn again (a file loaded or removed, back from Rules): the name already typed is decided as if typed now, so empty
   // boxes fill, typed ones get the offer, and an unknown name its mark.
   queueMicrotask(() => { if (line.isConnected) onName(draftTeam.name); });
   return { line, onName, listId: TEAM_LIST_ID };
+}
+
+// ---- The schedule's Round and Room pickers (1.16.0, SPEC-partB 7.4) -------------------------------------------------------
+
+// Above the team cards when the tournament file has a schedule: Round lists its rounds, Room the chosen round's rooms with
+// their teams. Picking a room fills Round and Room in Match details and both team names, which the cards then treat as if
+// typed (empty boxes fill, typed names are offered over); everything stays editable. A room still holding slots fills
+// Round and Room only. Changing Round keeps the room when the new round uses it, and fills its teams. The boxes are set
+// and told, as typing would, so nothing is redrawn and the picker keeps its focus. What the pickers put in is kept as
+// `draft.picked`, so a later change empties only that, and only while the box still holds it (schedule.js pickerPlan);
+// `sync` moves the pickers to what is typed in Match details' Round and Room boxes. Gives { node, sync }.
+export function schedulePickers(now, draft) {
+  const schedule = now.tournament?.schedule;
+  if (!schedule) return null;
+  ensureStyles('schedule-pick-css', '#schedule-pick { display: grid; grid-template-columns: minmax(96px, 1fr) 3fr; gap: 8px; margin-bottom: 8px; }'
+    + ' #schedule-pick .f > span { font-weight: bold; } @media (max-width: 380px) { #schedule-pick { grid-template-columns: 1fr; } }');
+  const tell = (id, value) => {
+    const box = document.getElementById(id);
+    if (!box) return;
+    box.value = value;
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const setDetail = (key, value) => { draft.details[key] = value; tell(`detail-${key}`, value); };
+  const option = (value, label) => h('option', { value }, label);
+  const round = h('select', { id: 'pick-round' }, option('', 'Choose'), roundChoices(schedule).map(c => option(c.value, c.label)));
+  const room = h('select', { id: 'pick-room' });
+  const fillRooms = () => {
+    const choices = roomChoices(schedule, round.value);
+    room.replaceChildren(option('', choices.length ? 'Choose' : 'Choose a round first'), ...choices.map(c => option(c.value, c.label)));
+    room.disabled = choices.length === 0;
+    room.value = scheduledGame(schedule, round.value, draft.details.room)?.room ?? '';
+  };
+  const pick = wantedRoom => {
+    const plan = pickerPlan(schedule, round.value, wantedRoom, draft.picked ?? null, { room: draft.details.room, teams: draft.teams.map(team => team.name) });
+    if (plan.round !== null) setDetail('round', plan.round);
+    if (plan.room !== null) setDetail('room', plan.room);
+    plan.teams.forEach((name, t) => { if (name !== null) tell(`team${t}-name`, name); });
+    draft.picked = plan.picked;
+    fillRooms();
+  };
+  const sync = () => {
+    const typedRound = roundNumber(draft.details.round);
+    round.value = typedRound !== null && schedule.rounds.some(r => r.round === typedRound) ? String(typedRound) : '';
+    fillRooms();
+  };
+  sync();
+  round.addEventListener('change', () => { if (round.value) pick(draft.details.room); else fillRooms(); });
+  room.addEventListener('change', () => pick(room.value));
+  return { node: h('div', { id: 'schedule-pick' }, field('Round', round), field('Room (from the schedule)', room)), sync };
 }

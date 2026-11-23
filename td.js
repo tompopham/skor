@@ -7,14 +7,21 @@
 import { h } from './dom.js';
 import { copyText } from './view-common.js';
 import { VERSION } from './version.js';
+import { readTournamentFile } from './schedule.js';
+import { initSchedule } from './td-schedule.js';
+import { initStandings } from './td-standings.js';
 import {
-  MAX_BYTES, fileKind, tooBig, readGame, readTournament, checkGames, reportText, summaryLines, BYE_LINE, MODAQ_HEAD, NO_TOURNAMENT,
+  MAX_BYTES, fileKind, tooBig, readGame, checkGames, reportText, summaryLines, BYE_LINE, MODAQ_HEAD, NO_TOURNAMENT,
 } from './td-check.js';
 
 const $ = id => document.getElementById(id);
 // tournament: readTournament()'s result or null. entries: the game files read, or null before any. run and tournamentRun
 // count each choice, so a slow read of an earlier choice stops, or is dropped, when a newer one starts.
-const state = { tournament: null, entries: null, run: 0, tournamentRun: 0 };
+// tournamentText and tournamentFile: the loaded file's text and name, which Save tournament file with schedule builds on.
+const state = { tournament: null, tournamentText: null, tournamentFile: null, entries: null, run: 0, tournamentRun: 0 };
+const refreshSchedule = initSchedule(() => ({ tournament: state.tournament, text: state.tournamentText, fileName: state.tournamentFile }));
+// The last step, Standings and afternoon brackets (1.16.0, 7.6), drawn after the report whenever either changes.
+const refreshStandings = initStandings(() => ({ tournament: state.tournament, text: state.tournamentText, fileName: state.tournamentFile, entries: state.entries }));
 const collator = new Intl.Collator('en-GB', { numeric: true });
 
 // ---- Step 1: the tournament file ------------------------------------------------------------------------------------------
@@ -24,9 +31,10 @@ async function loadTournament(file) {
   const error = $('tournament-error');
   error.textContent = '';
   let read;
+  let text = null;
   if (file.size > MAX_BYTES) read = { ok: false, error: 'This file is too large to be a tournament file.' };
   else {
-    try { read = readTournament(await file.text()); } catch { read = { ok: false, error: 'This file could not be read from the disk. Try again.' }; }
+    try { text = await file.text(); read = readTournamentFile(text); } catch { read = { ok: false, error: 'This file could not be read from the disk. Try again.' }; }
   }
   if (run !== state.tournamentRun) return;   // a file chosen after it is already being read
   if (!read.ok) {
@@ -34,7 +42,12 @@ async function loadTournament(file) {
     return;
   }
   state.tournament = read;
-  $('tournament-status').textContent = `Tournament: ${read.name ?? file.name} (${read.teams.length} team${read.teams.length === 1 ? '' : 's'}), from ${file.name}.`;
+  state.tournamentText = text;
+  state.tournamentFile = file.name;
+  const rounds = read.schedule?.rounds.length ?? 0;
+  $('tournament-status').textContent = `Tournament: ${read.name ?? file.name} (${read.teams.length} team${read.teams.length === 1 ? '' : 's'}), from ${file.name}.`
+    + (rounds ? ` It has a schedule of ${rounds} round${rounds === 1 ? '' : 's'}.` : '');
+  refreshSchedule();
   drawReport();
 }
 
@@ -55,6 +68,7 @@ async function readFiles(items, run = ++state.run) {
     state.entries = null;
     $('report').replaceChildren();
     $('report').hidden = true;
+    refreshStandings();
     status.textContent = 'There were no files in what was chosen.';
     return;
   }
@@ -142,6 +156,7 @@ function gridTable(report) {
 
 function drawReport() {
   const root = $('report');
+  refreshStandings();
   if (!state.entries) return;
   let report;
   try { report = checkGames(state.entries, state.tournament); } catch {
