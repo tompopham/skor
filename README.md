@@ -2,13 +2,13 @@
 
 Skor is a live match scorer for buzzer quizzes. One person keeps score of two teams while a reader asks the questions. Plain web page, no libraries, no sign-in, no server. It works with no signal once it has been opened once.
 
-**Use it:** https://tompopham.github.io/skor/
+**Use it:** https://skorquiz.com/
 
 On an iPhone, open that address in Safari and use Share, then Add to Home Screen. A match is saved on the device you scored it on, and nowhere else. Save a backup file at halftime and at the end (Menu, then Save files).
 
 ## What is in this repository
 
-Only the finished web page. Nothing here needs building. Every file in this folder is loaded by the page (`sw.js` keeps a copy of them all for offline use).
+Only the finished web page. Nothing here needs building. Every file in this folder is loaded by the page (`sw.js` keeps a copy of them all for offline use), except `CNAME`, which tells GitHub Pages to serve the site at skorquiz.com. Deleting `CNAME` would take the site off that address.
 
 ## Please do not edit the files here
 
