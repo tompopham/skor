@@ -338,6 +338,7 @@ const LEAVE_OUT = n => `Fix: Leave it out of the main import (choose Discard for
 const KINDS = {
   folder: ['game in the wrong folder', 'games in the wrong folder'],
   inside: ['game with the wrong round inside', 'games with the wrong round inside'],
+  moved: ['game probably in the wrong round', 'games probably in the wrong round'],
   filename: ['file name with the wrong round', 'file names with the wrong round'],
   unclear: ['game whose round is unclear', 'games whose round is unclear'],
   noround: ['game with no round inside', 'games with no round inside'],
@@ -346,6 +347,7 @@ const KINDS = {
   double: ['team with two games in a round', 'teams with two games in a round'],   // counted by team, not by item
   self: ['team on both sides of a game', 'teams on both sides of a game'],
   missing: ['game missing', 'games missing'],
+  unscheduled: ['game not in the schedule', 'games not in the schedule'],
   nogame: ['team with no game in a round', 'teams with no game in a round'],
   emptyround: ['round with no games', 'rounds with no games'],
   manyempty: ['run of empty rounds', 'runs of empty rounds'],
@@ -368,7 +370,7 @@ const PLACES = [['folder', 'the folder'], ['fileName', 'the file name'], ['insid
 // since each already has a round 2 game and none in round 1.) `clashes(r)` gives the game's teams that already have
 // another game in round r; the one round where none does is the game's round. With no single such round, the schedule
 // decides. `folderNames` maps a round to the name of a folder holding it, so the fix can name a real folder.
-export function roundItem({ path, round }, { folderNames = new Map(), clashes = () => [] } = {}) {
+export function roundItem({ path, round }, { folderNames = new Map(), clashes = () => [], lastRound = null, busy = () => true } = {}) {
   const name = fileName(path);
   const { folder, inside } = round;
   const has = value => value !== null && value !== undefined;
@@ -380,31 +382,39 @@ export function roundItem({ path, round }, { folderNames = new Map(), clashes = 
   const at = { path, round: has(inside) ? inside : null, real: null };
   const candidates = [...groups.keys()];
   const fitting = candidates.filter(r => clashes(r).length === 0);
-  const real = groups.size === 1 ? candidates[0] : fitting.length === 1 ? fitting[0] : null;
+  // Of several rounds that fit, the one the other games are in beats one nobody else plays (a typo like 12 for 2).
+  const lively = fitting.filter(r => busy(r));
+  const real = groups.size === 1 ? candidates[0] : fitting.length === 1 ? fitting[0] : lively.length === 1 ? lively[0] : null;
+  // A round later than the tournament's last: YellowFruit has no such round, and refuses the game (TournamentManager.ts:562-565).
+  const beyond = has(inside) && lastRound !== null && inside > lastRound;
+  const placed = n => (beyond ? `Round ${n} is later than any other game file. If the tournament has no round ${n}, YellowFruit refuses the game; if it has one, its main Import button will put the game there.` : MAIN_IMPORT(n));
   const wrong = candidates.filter(r => r !== real);
   const clashing = real === null ? [] : [...new Set(wrong.flatMap(r => clashes(r)))];
   const because = clashing.length
     ? ` ${joinAnd(clashing)} already ${clashing.length === 1 ? 'has' : 'have'} a game in ${wrong.length === 1 ? `round ${wrong[0]}` : `rounds ${joinAnd(wrong)}`}.` : '';
   if (has(inside)) {
-    if (real === null) return item('unclear', 'Round unclear', 'Fix: Check the schedule for which round it was.', `${name}: ${said}. ${MAIN_IMPORT(inside)}`, at);
+    if (real === null) return item('unclear', 'Round unclear', 'Fix: Check the schedule for which round it was.', `${name}: ${said}. ${placed(inside)}`, { ...at, beyond });
     if (real === inside && has(folder) && folder !== real) {
       const target = folderNames.get(real);
       const right = groups.get(real).map(label => (label === 'the file name' ? 'its file name' : 'the round inside it'));
-      return item('folder', 'Game in the wrong folder', `Fix: Move it to ${target ? `the "${target}" folder` : `a round ${real} folder`}.`,
-        `${name} is in the "${folderRound(path).name}" folder, but ${joinAnd(right)} ${right.length === 1 ? 'says' : 'say'} round ${real}.${because} ${STILL(real)}`, at);
+      // A file name that says another round too (all three places disagree) is part of the same fix (1.19.0).
+      const nameRound = round.fileName;
+      const nameWrong = has(nameRound) && nameRound !== real;
+      return item('folder', 'Game in the wrong folder', `Fix: Move it to ${target ? `the "${target}" folder` : `a round ${real} folder`}${nameWrong ? ` and change the round in its file name to ${real}` : ''}.`,
+        `${name} is in the "${folderRound(path).name}" folder${nameWrong ? ` and its file name says round ${nameRound}` : ''}, but ${joinAnd(right)} ${right.length === 1 ? 'says' : 'say'} round ${real}.${because} ${STILL(real)}`, { ...at, real });
     }
     if (real === inside) {
       return item('filename', 'Wrong round in a file name', `Fix: Change the round in its file name to ${real}.`,
         `${name}: ${said}.${because} YellowFruit will put it in round ${real} either way.`, at);
     }
-    return item('inside', 'Wrong round inside a game file', LEAVE_OUT(real), `${name}: ${said}.${because} ${MAIN_IMPORT(inside)}`, { ...at, real });
+    return item('inside', 'Wrong round inside a game file', LEAVE_OUT(real), `${name}: ${said}.${because} ${placed(inside)}`, { ...at, real, beyond });
   }
   const odd = round.insideText ?? null;
   const why = !odd ? 'has no round' : odd.quoted ? `has its round as text ("${odd.text}")` : `has a round that is not a round number (${odd.text})`;
   const fix = real !== null ? OWN_IMPORT(real) : "Fix: Check the schedule, then import it with that round's own Import button in YellowFruit.";
   const detail = given.length ? `${name}: ${said}, but the file itself ${why}, so YellowFruit's main Import button can't place it.${because}`
     : `${name}: the folder and the file name give no round, and the file itself ${why}, so YellowFruit's main Import button can't place it.`;
-  return item('noround', 'No round inside a game file', fix, detail, at);
+  return item('noround', 'No round inside a game file', fix, detail, { ...at, real });
 }
 
 // An item as plain text, its three parts on three lines.
@@ -427,27 +437,104 @@ const HOW_SAID = {
   initial: m => `${m.roster} (filed as ${m.filed}: same surname and first letter)`,
 };
 
+// What YellowFruit 4.0.18 treats as one name before it scores anything: it lowercases and compares nothing else, so an
+// apostrophe, an accent or a doubled space makes a different name (FileParsing.ts:41, 850-855, 924-930, 1182-1205). 1.19.0.
+const lower = name => String(name ?? '').toLowerCase();
+
+// THE FINISHED-TEAM RULE (1.19.0; the choice is Tom's and not yet made, 24 Nov 2026; built as recommended). With no
+// schedule, a team that has no game after its last game in a later phase (the afternoon) is taken as knocked out or done,
+// not as missing a game. Never in the first phase (a missing last-round game in the morning pools must be caught), and
+// never with a schedule (the schedule decides). To change the rule, change this one function.
+export function teamIsFinished({ phase, round, lastRound }) {
+  return phase > 0 && lastRound !== null && lastRound !== undefined && round > lastRound;
+}
+
+// The rounds where a new phase starts, from each round's games as pairs of rows (1.19.0; spec 4.2). A phase is a stretch
+// of rounds whose games keep the same pools. A new one starts at the first round whose games either
+//  (a) join two groups of teams that had played apart until then, each of three or more teams and unchanged in the round
+//      before (two small groups joined in round 2 of a round robin are not it: the second round always joins the first
+//      round's pairs); or
+//  (b) after a pool of four or more has played every other team in it (its round robin is complete), involve only half the
+//      pool or fewer: a final, semis or a playoff among one pool's teams (review 3, 24 Nov 2026). A double round robin is
+//      not it: the round after the first cycle that is partial because a game is missing is followed by a full one.
+export function phaseStarts(roundPairs) {
+  const rounds = [...roundPairs.keys()].sort((a, b) => a - b);
+  if (!rounds.length) return [];
+  const starts = [rounds[0]];
+  let parent = new Map();
+  let size = new Map();
+  let changed = new Map();   // root -> the round its team set last changed in
+  let members = new Map();   // root -> Set of teams
+  let met = new Set();
+  let cycle = new Map();     // root -> { rounds: rounds since complete, second: a second cycle is under way }
+  const find = x => { if (!parent.has(x)) return undefined; while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+  const key = (x, y) => (x < y ? `${x}|${y}` : `${y}|${x}`);
+  const playing = (root, pairs) => pairs.filter(([x, y]) => find(x) === root).length * 2;
+  const fresh = () => { parent = new Map(); size = new Map(); changed = new Map(); members = new Map(); met = new Set(); cycle = new Map(); };
+  let previous = null;
+  for (const [index, round] of rounds.entries()) {
+    const pairs = roundPairs.get(round);
+    const settled = x => parent.has(x) && size.get(find(x)) >= 3 && previous !== null && changed.get(find(x)) < previous;
+    let boundary = pairs.some(([x, y]) => settled(x) && settled(y) && find(x) !== find(y));
+    if (!boundary) {
+      for (const root of new Set([...parent.keys()].map(find))) {
+        const n = size.get(root);
+        if (n < 4 || met.size === 0) continue;
+        const have = [...members.get(root)].reduce((sum, x, i, all) => sum + all.slice(i + 1).filter(y => met.has(key(x, y))).length, 0);
+        if (have < (n * (n - 1)) / 2) continue;   // its round robin is not complete
+        const state = cycle.get(root) ?? { rounds: 0, second: false };
+        cycle.set(root, state);
+        const inRound = playing(root, pairs);
+        const full = inRound >= n - 1;
+        const perCycle = n % 2 === 0 ? n - 1 : n;
+        if (inRound === 0) continue;   // a pool that sits a round out is not in it
+        state.rounds += 1;
+        if (full) { if (state.rounds === 1) state.second = true; continue; }
+        if (inRound > n / 2) continue;   // a round with most of the pool in it, a game or two short
+        if (state.second && state.rounds <= perCycle) continue;   // the second cycle of a double round robin
+        const later = rounds[index + 1];
+        if (state.rounds === 1 && later !== undefined && playing(root, roundPairs.get(later)) >= n - 1) { state.second = true; continue; }
+        boundary = true;
+      }
+    }
+    if (boundary) { starts.push(round); fresh(); }
+    for (const [x, y] of pairs) {
+      for (const team of [x, y]) if (!parent.has(team)) { parent.set(team, team); size.set(team, 1); changed.set(team, round); members.set(team, new Set([team])); }
+      const rx = find(x);
+      const ry = find(y);
+      met.add(key(x, y));
+      if (rx !== ry) {
+        parent.set(rx, ry); size.set(ry, size.get(rx) + size.get(ry)); changed.set(ry, round);
+        for (const m of members.get(rx)) members.get(ry).add(m);
+        members.delete(rx); cycle.delete(rx); cycle.delete(ry);
+      }
+    }
+    previous = round;
+  }
+  return starts;
+}
+
 // The whole report. `entries` are the files in path order: readGame()'s results and { path, kind: 'modaq' | 'other' } for
-// the rest. `tournament` is readTournament()'s result, or null. Gives the three jobs' lists (each item with its `line`),
-// the grid, and the files not read.
+// the rest. `tournament` is readTournament()'s result (readTournamentFile()'s, with its `schedule`, when it has one), or
+// null. Gives the three jobs' lists (each item with its `line`), the grid, and the files not read.
 export function checkGames(entries, tournament) {
   const games = entries.filter(entry => entry.kind === 'game').map(entry => entry.game);
   const registered = tournament?.teams ?? [];
 
   // Rows: the registered teams in the file's order; then each name not in the file that is not matched to one.
-  // A team registered twice under one name is one row.
+  // A team registered twice under one name is one row. Names are the same only as YellowFruit takes them (lowercase).
   const rows = [];
   const rowOfFold = new Map();
   for (const team of registered) {
-    if (rowOfFold.has(fold(team.name))) continue;
-    rowOfFold.set(fold(team.name), rows.length);
+    if (rowOfFold.has(lower(team.name))) continue;
+    rowOfFold.set(lower(team.name), rows.length);
     rows.push({ name: team.name, registered: true, roster: team.players });
   }
-  const rowOfTeam = team => rowOfFold.get(fold(team.name));
-  const strays = new Map();   // fold -> { name, players: Map(fold -> name), games: Set(path) }
+  const rowOfTeam = team => rowOfFold.get(lower(team.name));
+  const strays = new Map();   // lowercase -> { name, players: Map(fold -> name), games: Set(path) }
   for (const game of games) {
     for (const side of game.sides) {
-      const key = fold(side.name);
+      const key = lower(side.name);
       if (rowOfFold.has(key)) continue;
       if (!strays.has(key)) strays.set(key, { name: side.name, players: new Map(), games: new Set() });
       const stray = strays.get(key);
@@ -457,12 +544,16 @@ export function checkGames(entries, tournament) {
   }
   const strayList = [...strays.entries()].map(([key, stray]) => ({ key, ...stray, players: [...stray.players.values()] })).sort(byName);
   const names = tournament ? [] : null;
+  const nameItems = new Map();   // stray key -> its name item
   const newRows = [];
   for (const stray of strayList) {
     const found = tournament ? suggestTeam(stray.name, stray.players, registered) : { team: null, tie: null, matched: [] };
     const yellowFruit = tournament ? yellowFruitTeam(stray.name, registered) : null;
-    // With no shared player, the grid takes the team YellowFruit will (a misspelt name in a game with no players listed).
-    const into = found.team ?? (found.tie ? null : yellowFruit);
+    // No registered team shares a player with it, though it lists players: it is a team the file does not have (1.19.0), so
+    // it stays its own row, not filed under the team YellowFruit picks, which would blame that team for its players.
+    const unknown = Boolean(tournament) && stray.players.length > 0 && !found.team && !found.tie;
+    // With no players listed, the grid takes the team YellowFruit will (a misspelt name in a game with no players listed).
+    const into = unknown ? null : found.team ?? (found.tie ? null : yellowFruit);
     if (into) rowOfFold.set(stray.key, rowOfTeam(into));
     else newRows.push(stray);
     if (!tournament) continue;
@@ -486,67 +577,71 @@ export function checkGames(entries, tournament) {
     }
     const fix = found.team ? `Fix: Change "${stray.name}" to "${found.team.name}" ${inThe} before importing.`
       : found.tie ? `Fix: Find out whether "${stray.name}" is ${joinOr(found.tie.map(team => `"${team.name}"`))}, and change it ${inThe} before importing.`
-        : yellowFruit ? `Fix: Check that "${stray.name}" means "${yellowFruit.name}".`
-          : `Fix: Find out which team "${stray.name}" is, and change it ${inThe} before importing.`;
-    names.push(item('team', 'Team name not in the tournament file', fix, detail, fields));
+        : unknown ? `Fix: Add "${stray.name}" to the tournament file, or check its name ${inThe} before importing.`
+          : yellowFruit ? `Fix: Check that "${stray.name}" means "${yellowFruit.name}".`
+            : `Fix: Find out which team "${stray.name}" is, and change it ${inThe} before importing.`;
+    const nameItem = item('team', 'Team name not in the tournament file', fix, detail, fields);
+    names.push(nameItem);
+    nameItems.set(stray.key, nameItem);
   }
+  const strayItemOfRow = new Map();   // row of a team not in the tournament file -> its name item (the knock-ons point at it)
   for (const stray of newRows) {
     rowOfFold.set(stray.key, rows.length);
+    if (nameItems.has(stray.key)) strayItemOfRow.set(rows.length, nameItems.get(stray.key));
     rows.push({ name: stray.name, registered: false, roster: null });
   }
-  const rowOf = name => rowOfFold.get(fold(name));
+  const rowOf = name => rowOfFold.get(lower(name));
+
+  // Each game's two rows. A game with one team on both sides whose players show which team the other side is gets that
+  // side moved to that team (1.19.0), so the grid does not blame the right team for a missing game; the game's own item
+  // says to change the name. `selfGames` holds the games with one team on both sides.
+  const gameRows = new Map();   // path -> [row, row]
+  const selfGames = new Map();  // path -> { side, team } (team: the registered team the side's players belong to, or null)
+  for (const game of games) {
+    const pair = game.sides.map(side => rowOf(side.name));
+    if (pair[0] === pair[1]) {
+      let suggested = null;
+      if (tournament) {
+        const guess = game.sides.map(side => suggestTeam(side.name, side.players, registered).team);
+        const guessRow = guess.map(team => (team ? rowOfTeam(team) : null));
+        const wrong = [0, 1].filter(s => guessRow[s] !== null && guessRow[s] !== pair[s]);
+        if (wrong.length === 1 && guessRow[1 - wrong[0]] !== null && guessRow[1 - wrong[0]] === pair[1 - wrong[0]]) {
+          suggested = { side: wrong[0], team: guess[wrong[0]] };
+          pair[wrong[0]] = guessRow[wrong[0]];
+        }
+      }
+      selfGames.set(game.path, suggested ?? { side: null, team: null });
+    }
+    gameRows.set(game.path, pair);
+  }
 
   // Each game into its round's cells: the round YellowFruit will use, else the file name's, else the folder's.
-  const cells = rows.map(() => new Map());
-  const parent = rows.map((_, i) => i);
-  const top = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
-  const played = new Map();   // group top -> Set(round)
-  const roundsSeen = new Set();
-  const placed = [];
   const hasGame = new Set();
-  const gameRows = new Map();   // path -> [row, row]
-  for (const game of games) {
-    const [a, b] = game.sides.map(side => rowOf(side.name));
-    gameRows.set(game.path, [a, b]);
-    hasGame.add(a).add(b);
-    parent[top(a)] = top(b);
-    const { inside, fileName, folder } = game.round;
-    const round = inside ?? fileName ?? folder;
-    if (round === null) continue;
-    roundsSeen.add(round);
-    placed.push({ game, round, rows: [a, b] });
-  }
-  for (const { game, round, rows: [a, b] } of placed) {
-    const group = top(a);
-    if (!played.has(group)) played.set(group, new Set());
-    played.get(group).add(round);
-    game.sides.forEach((side, s) => {
-      const row = s === 0 ? a : b;
-      const other = s === 0 ? b : a;
-      const cell = cells[row].get(round) ?? [];
-      if (cell.some(entry => entry.path === game.path)) return;
-      const filedAs = fold(side.name) === fold(rows[row].name) ? null : side.name;
-      cell.push({ path: game.path, opponent: other + 1, opponentName: rows[other].name, filedAs, print: game.print });
-      cells[row].set(round, cell);
-    });
-  }
-  // A round between the first and the last with no game at all (a round's folder left out, say) gets its own column and
-  // line; so many that the round numbers must be wrong get one line instead.
-  const seen = [...roundsSeen].sort((x, y) => x - y);
-  const holes = [];
-  for (let round = seen[0]; round < seen.at(-1); round += 1) if (!roundsSeen.has(round)) holes.push(round);
-  const listHoles = holes.length <= 5;
-  const gridRounds = listHoles ? [...seen, ...holes].sort((x, y) => x - y) : seen;
-  const gridRows = rows.map((row, i) => {
-    const groupRounds = played.get(top(i)) ?? new Set();
-    const rowCells = {};
-    for (const round of gridRounds) {
-      const list = (cells[i].get(round) ?? []).sort((x, y) => collator.compare(x.path, y.path));
-      const state = list.length > 1 ? 'double' : list.length === 1 ? 'game' : groupRounds.has(round) ? 'gap' : 'none';
-      rowCells[round] = { state, games: list };
+  for (const game of games) for (const row of gameRows.get(game.path)) hasGame.add(row);
+  const layout = roundOf => {
+    const cells = rows.map(() => new Map());
+    const placed = [];
+    for (const game of games) {
+      const round = roundOf(game);
+      if (round === null || round === undefined) continue;
+      const [a, b] = gameRows.get(game.path);
+      placed.push({ game, round, rows: [a, b] });
+      game.sides.forEach((side, s) => {
+        const row = s === 0 ? a : b;
+        const other = s === 0 ? b : a;
+        const cell = cells[row].get(round) ?? [];
+        if (cell.some(entry => entry.path === game.path)) return;
+        const filedAs = lower(side.name) === lower(rows[row].name) ? null : side.name;
+        // Whether YellowFruit takes the name filed as for this team on its own (so a "filed as" mark needs no fix).
+        const filedOk = Boolean(filedAs) && Boolean(tournament) && rows[row].registered && lower(yellowFruitTeam(side.name, registered)?.name) === lower(rows[row].name);
+        cell.push({ path: game.path, opponent: other + 1, opponentName: rows[other].name, filedAs, filedOk, print: game.print });
+        cells[row].set(round, cell);
+      });
     }
-    return { n: i + 1, name: row.name, registered: row.registered, cells: rowCells };
-  });
+    return { cells, placed };
+  };
+  const initialRound = game => game.round.inside ?? game.round.fileName ?? game.round.folder;
+  const first = layout(initialRound);
 
   // The rounds list first: a double or a gap that a game's wrong round explains says so.
   const folderNames = new Map();
@@ -557,12 +652,113 @@ export function checkGames(entries, tournament) {
   // A copy of the same game (another file with the same text) is not a clash: it is the same game filed twice, which the
   // doubles below report, and counting it would make the copy's own round look taken.
   const clashes = game => r => [...new Set(gameRows.get(game.path))]
-    .filter(row => (cells[row].get(r) ?? []).some(entry => entry.path !== game.path && entry.print !== game.print)).map(row => rows[row].name);
-  let rounds = games.map(game => roundItem(game, { folderNames, clashes: clashes(game) })).filter(Boolean);
+    .filter(row => (first.cells[row].get(r) ?? []).some(entry => entry.path !== game.path && entry.print !== game.print)).map(row => rows[row].name);
+  // The last round the tournament has: the schedule's, else the latest round any other game file gives. A round later than
+  // that is one YellowFruit does not have, and it refuses a game in it (TournamentManager.ts:562-565).
+  const scheduled = tournament?.schedule?.rounds ?? [];
+  const lastRoundFor = game => {
+    const others = first.placed.filter(p => p.game.path !== game.path).map(p => p.round);
+    const all = [...others, ...scheduled.map(r => r.round)];
+    return all.length ? Math.max(...all) : null;
+  };
+  const busy = game => r => first.placed.some(p => p.round === r && p.game.path !== game.path);
+  let rounds = games.map(game => roundItem(game, { folderNames, clashes: clashes(game), lastRound: lastRoundFor(game), busy: busy(game) })).filter(Boolean);
+
+  // A game YellowFruit's main Import cannot place, or will refuse, is put in the grid in the round its item worked out,
+  // since that is where the TD will import it (1.19.0); the others stay where YellowFruit will put them.
+  const moveTo = new Map();
+  for (const entry of rounds) {
+    if (entry.real !== null && entry.real !== undefined && (entry.kind === 'noround' || (entry.kind === 'inside' && entry.beyond))) moveTo.set(entry.path, entry.real);
+  }
+  const { cells, placed } = layout(game => moveTo.get(game.path) ?? initialRound(game));
+  const roundsSeen = new Set(placed.map(p => p.round));
+  const seen = [...roundsSeen].sort((x, y) => x - y);
+
+  // Phases (1.19.0): the schedule's rounds with every game between two named teams are exact; the others are judged in the
+  // phase their round falls in, from where the games join pools.
+  const roundPairs = new Map();
+  for (const { round, rows: [a, b] } of placed) roundPairs.set(round, [...(roundPairs.get(round) ?? []), [a, b]]);
+  const starts = phaseStarts(roundPairs);
+  const phaseOf = round => starts.reduce((p, start, k) => (round >= start ? k : p), 0);
+  const phases = starts.map(() => ({ parent: rows.map((_, i) => i), has: new Set(), played: new Map(), last: new Map(), size: new Map(), known: new Map(), met: new Set() }));
+  const topIn = (ph, i) => { while (ph.parent[i] !== i) { ph.parent[i] = ph.parent[ph.parent[i]]; i = ph.parent[i]; } return i; };
+  const pairKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  for (const { round, rows: [a, b] } of placed) {
+    const ph = phases[phaseOf(round)];
+    ph.has.add(a).add(b);
+    ph.parent[topIn(ph, a)] = topIn(ph, b);
+    ph.met.add(pairKey(a, b));
+  }
+  for (const [k, ph] of phases.entries()) {
+    for (const { round, rows: [a, b] } of placed.filter(p => phaseOf(p.round) === k)) {
+      const root = topIn(ph, a);
+      if (!ph.played.has(root)) ph.played.set(root, new Set());
+      ph.played.get(root).add(round);
+      for (const row of [a, b]) ph.last.set(row, Math.max(ph.last.get(row) ?? 0, round));
+    }
+    for (const i of ph.has) {
+      ph.size.set(topIn(ph, i), (ph.size.get(topIn(ph, i)) ?? 0) + 1);
+      ph.known.set(topIn(ph, i), (ph.known.get(topIn(ph, i)) ?? true) && rows[i].registered);
+    }
+  }
+  // The schedule's rounds that name every team: round -> [[row, row]].
+  const exact = new Map();
+  for (const entry of scheduled) {
+    const pairs = entry.games.map(g => g.sides.map(side => (side.team !== undefined ? rowOfFold.get(lower(side.team)) : undefined)));
+    if (pairs.length && pairs.every(pair => pair.length === 2 && pair.every(row => row !== undefined) && pair[0] !== pair[1])) exact.set(entry.round, pairs);
+  }
+  const inPair = (pairs, i) => pairs.some(([x, y]) => x === i || y === i);
+
+  // A round between the first and the last with no game at all (a round's folder left out, say) gets its own column and
+  // line; so many that the round numbers must be wrong get one line instead.
+  const holes = [];
+  for (let round = seen[0]; round < seen.at(-1); round += 1) if (!roundsSeen.has(round)) holes.push(round);
+  const listHoles = holes.length <= 5;
+  const gridRounds = listHoles ? [...seen, ...holes].sort((x, y) => x - y) : seen;
+  const gridRows = rows.map((row, i) => {
+    const rowCells = {};
+    for (const round of gridRounds) {
+      const list = (cells[i].get(round) ?? []).sort((x, y) => collator.compare(x.path, y.path));
+      let state = 'none';
+      if (list.length > 1) state = 'double';
+      else if (list.length === 1) state = 'game';
+      else if (exact.has(round)) state = inPair(exact.get(round), i) ? 'gap' : 'free';
+      else {
+        const k = phaseOf(round);
+        const ph = phases[k];
+        if (ph.has.has(i) && ph.played.get(topIn(ph, i))?.has(round)) state = teamIsFinished({ phase: k, round, lastRound: ph.last.get(i) }) ? 'finished' : 'gap';
+      }
+      rowCells[round] = { state, games: list };
+    }
+    return { n: i + 1, name: row.name, registered: row.registered, cells: rowCells };
+  });
+  const stateAt = (i, round) => gridRows[i].cells[round]?.state;
+
+  // A game all of whose places agree on a round can still be in the wrong one: MODAQ not advanced to the next round gives
+  // a team two games in one round and none in the next. When exactly one game, moved to exactly one round, clears the
+  // doubles of both its teams and fills a gap for each, it is probably that game (1.19.0).
+  const hasItem = new Set(rounds.map(entry => entry.path));
+  const candidates = [];
+  for (const { game, round, rows: [a, b] } of placed) {
+    if (a === b || hasItem.has(game.path) || exact.has(round)) continue;
+    if ((cells[a].get(round) ?? []).length !== 2 || (cells[b].get(round) ?? []).length !== 2) continue;
+    const targets = gridRounds.filter(r => r !== round && !exact.has(r) && stateAt(a, r) === 'gap' && stateAt(b, r) === 'gap');
+    if (targets.length === 1) candidates.push({ game, round, rows: [a, b], target: targets[0] });
+  }
+  for (const c of candidates) {
+    const clash = candidates.some(o => o !== c && o.rows.some(row => c.rows.includes(row)) && o.round === c.round);
+    if (clash) continue;
+    const name = fileName(c.game.path);
+    const teams = c.rows.map(row => rows[row].name);
+    rounds.push(item('moved', 'Game probably in the wrong round',
+      `Fix: If it was round ${c.target}, leave it out of the main import (choose Discard for it in the preview). Then import it with round ${c.target}'s own Import button.`,
+      `${name} says round ${c.round}, but ${joinAnd(teams)} each have two games in round ${c.round} and none in round ${c.target}, and this is the one game that would fix both. YellowFruit will put it in round ${c.round}.`,
+      { path: c.game.path, round: c.round, real: c.target }));
+  }
   // A game YellowFruit will put in the wrong round gives its teams a double there and a gap in its real round. Those
   // items get the same fix as the game's own item, so one fix is not read as three.
   const causedBy = new Map();   // `${round}|${row}` -> the game's round item
-  for (const entry of rounds.filter(r => r.kind === 'inside')) {
+  for (const entry of rounds.filter(r => (r.kind === 'inside' || r.kind === 'moved') && !r.beyond)) {
     for (const row of gameRows.get(entry.path)) {
       causedBy.set(`${entry.round}|${row}`, entry);
       causedBy.set(`${entry.real}|${row}`, entry);
@@ -570,24 +766,26 @@ export function checkGames(entries, tournament) {
   }
   const causeOf = (round, teamRows) => teamRows.map(row => causedBy.get(`${round}|${row}`)).find(Boolean);
   const causeFix = entry => `Fix: Leave ${fileName(entry.path)} out of the main import and import it with round ${entry.real}'s own Import button (see Rounds that don't match). Then this goes away.`;
-  // An item a wrong round inside causes keeps that game's path in `cause`, so the top line counts the one fix, not each item.
-  const caused = entry => (entry ? { cause: entry.path } : {});
+  // An item a wrong round causes keeps that game's path in `cause`, so the top line counts the one fix, not each item.
+  const caused = entry => (entry ? { cause: entry.path, causeKind: entry.kind } : {});
+  // A team not in the tournament file takes the place of a registered one: it has "no game" in the rounds it did not play,
+  // and the team it stands for has none in the rounds it did (review 3). Those gaps point at the name item.
+  const strayCause = (round, teamRows) => {
+    for (const row of teamRows) if (strayItemOfRow.has(row)) return strayItemOfRow.get(row);
+    for (const [row, nameItem] of strayItemOfRow) if ((cells[row].get(round) ?? []).length) return nameItem;
+    return null;
+  };
+  const strayFix = nameItem => `Fix: Fix the team name "${nameItem.name}" first (see Names not in the tournament file). Then this goes away.`;
+  const strayLink = nameItem => ({ cause: `name:${nameItem.name}`, causeKind: 'name' });
 
   const doubles = [];
   const gaps = [];
-  const pairKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
-  const met = new Set(placed.map(({ rows: [a, b] }) => pairKey(a, b)));
+  const met = (k, x, y) => phases[k].met.has(pairKey(x, y));
   // File names, with their folder when two in one item have the same name ("Round 1/R01 A v B.qbj and Round 2/R01 A v B.qbj").
   const named = paths => {
     const plain = paths.map(fileName);
     return joinAnd(new Set(plain).size < plain.length ? paths.map(path => String(path).split('/').slice(-2).join('/')) : plain);
   };
-  const groupSize = new Map();   // group top -> how many teams with a game are in it
-  const groupKnown = new Map();  // group top -> whether every team in it is in the tournament file
-  for (const i of hasGame) {
-    groupSize.set(top(i), (groupSize.get(top(i)) ?? 0) + 1);
-    groupKnown.set(top(i), (groupKnown.get(top(i)) ?? true) && rows[i].registered);
-  }
   const covered = new Set();     // copies a "filed twice" item says to delete: their own round items are left out
   if (!listHoles) {
     gaps.push(item('manyempty', 'Round numbers look wrong', 'Fix: Check the round inside each game file: one probably has a typo.',
@@ -598,9 +796,30 @@ export function checkGames(entries, tournament) {
       gaps.push(item('emptyround', `No games in round ${round}`, `Fix: Find the round ${round} game files, unless round ${round} was not played.`,
         'There are games in the rounds before and after it.', { round, teams: [] }));
     }
-    for (const { game, rows: [a, b] } of placed.filter(p => p.round === round && p.rows[0] === p.rows[1])) {
+    for (const { game, rows: [a, b] } of placed.filter(p => p.round === round && selfGames.has(p.game.path))) {
+      const own = selfGames.get(game.path);
+      const base = `${fileName(game.path)}, round ${round}.`;
+      if (own.team) {
+        // YellowFruit takes the side by its name, then looks for the side's players on that team, and stops at the first it
+        // cannot find (FileParsing.ts:924-930), before it ever checks the teams differ (Match.ts:599-605).
+        const side = game.sides[own.side];
+        const wrongTeam = yellowFruitTeam(side.name, registered);
+        const missing = wrongTeam ? side.players.find(player => !yellowFruitFindsPlayer(player, wrongTeam)) : null;
+        const which = own.side === 0 ? 'first' : 'second';
+        doubles.push(item('self', `${game.sides[0].name} on both sides of a game`,
+          `Fix: Change the ${which} "${side.name}" to "${own.team.name}" inside the game file before importing.`,
+          `${base} The ${which} side's players are ${own.team.name}'s.${missing ? ` YellowFruit will refuse it: it cannot find ${missing} on team ${wrongTeam.name}.` : ''}`,
+          { round, teams: [side.name], files: [game.path] }));
+        continue;
+      }
+      let stop = null;
+      if (tournament) {
+        const team = yellowFruitTeam(game.sides[0].name, registered);
+        const missing = team ? game.sides.flatMap(side => side.players).find(player => !yellowFruitFindsPlayer(player, team)) : null;
+        if (missing) stop = `YellowFruit will refuse it: it cannot find ${missing} on team ${team.name}.`;
+      }
       doubles.push(item('self', `${rows[a].name} on both sides of a game`, 'Fix: Find out who the other team was, and correct its name in the file.',
-        `${fileName(game.path)}, round ${round}. YellowFruit will flag it: "A team cannot play itself".`, { round, teams: [rows[a].name], files: [game.path] }));
+        `${base} ${stop ?? 'YellowFruit will flag it: "A team cannot play itself".'}`, { round, teams: [rows[a].name], files: [game.path] }));
     }
     // Two or more files for a team in a round. The same files for both teams of one game make one item, not two.
     const groups = new Map();
@@ -617,16 +836,22 @@ export function checkGames(entries, tournament) {
     }
     for (const { files, games: entries, teams, teamRows } of groups.values()) {
       const fields = { round, teams, files };
-      const onePair = teams.length === 2 && entries.every(entry => fold(entry.opponentName) === fold(teams[1]));
+      const onePair = teams.length === 2 && entries.every(entry => lower(entry.opponentName) === lower(teams[1]));
       const same = entries.every(entry => entry.print === entries[0].print);
       if (onePair && same) {
         // When exactly one copy is in this round's folder, say to keep that one; the others' folders are then wrong too.
         const right = files.filter(path => roundFromFolder(path) === round);
         const keep = right.length === 1 && files.some(path => roundFromFolder(path) !== null && roundFromFolder(path) !== round) ? right[0] : null;
         if (keep) for (const path of files) if (path !== keep) covered.add(path);
+        // Every copy in a wrong folder, each with its own "move it" item: one item says keep one and move it (1.19.0).
+        const allMoves = !keep && files.every(path => rounds.some(entry => entry.path === path && entry.kind === 'folder' && entry.real === round));
+        if (allMoves) for (const path of files) covered.add(path);
         const others = files.length === 2 ? 'other' : 'others';
+        const target = folderNames.get(round);
         doubles.push(item('twice', `Same game filed ${files.length === 2 ? 'twice' : `${files.length} times`} in round ${round}`,
-          keep ? `Fix: Keep the one in the "${folderRound(keep).name}" folder and delete the ${others}.` : `Fix: Keep one file and delete the ${others}.`,
+          keep ? `Fix: Keep the one in the "${folderRound(keep).name}" folder and delete the ${others}.`
+            : allMoves ? `Fix: Keep one file and delete the ${others}. Move the one you keep to ${target ? `the "${target}" folder` : `a round ${round} folder`}.`
+              : `Fix: Keep one file and delete the ${others}.`,
           `${named(files)} hold the same game, ${teams[0]} v ${teams[1]}.`, fields));
       } else if (onePair) {
         doubles.push(item('versions', `Two versions of one game in round ${round}`, 'Fix: Check which file is right, and delete the other.',
@@ -637,22 +862,63 @@ export function checkGames(entries, tournament) {
           `${named(files)}. YellowFruit warns about the later file only.`, { ...fields, ...caused(cause) }));
       }
     }
+    const roundGaps = [];   // [row index, item]
+    if (exact.has(round)) {
+      if (!roundsSeen.has(round)) continue;   // a round with no files at all has its one "No games in round" item above
+      // The schedule's pairings for this round, against the games filed in it (1.19.0): a scheduled game with no file is a
+      // missing game; a team the schedule gives no game is not a gap (a bye); a game filed that the schedule does not have
+      // gets its own item. A game filed in one round that the schedule has in another says so in its one item.
+      const pairs = exact.get(round);
+      const filed = placed.filter(p => p.round === round && p.rows[0] !== p.rows[1]);
+      const hasFiled = (x, y) => filed.some(p => pairKey(p.rows[0], p.rows[1]) === pairKey(x, y));
+      const elsewhere = (x, y) => placed.some(p => p.round !== round && pairKey(p.rows[0], p.rows[1]) === pairKey(x, y)
+        && exact.has(p.round) && exact.get(p.round).every(([u, v]) => pairKey(u, v) !== pairKey(x, y)));
+      const strayOpponent = row => filed.some(p => p.rows.includes(row) && p.rows.some(other => !rows[other].registered));
+      for (const [x, y] of pairs) {
+        if (hasFiled(x, y) || elsewhere(x, y) || strayOpponent(x) || strayOpponent(y)) continue;
+        const cause = causeOf(round, [x, y]);
+        const byName = cause ? null : strayCause(round, [x, y]);
+        roundGaps.push([Math.min(x, y), item('missing', `Game missing in round ${round}`,
+          cause ? causeFix(cause) : byName ? strayFix(byName) : `Fix: Find the round ${round} game file for ${rows[x].name} v ${rows[y].name}.`,
+          `The schedule has ${rows[x].name} v ${rows[y].name} in round ${round}, but no game file has them playing each other.`,
+          { round, teams: [rows[x].name, rows[y].name], ...(cause ? caused(cause) : byName ? strayLink(byName) : {}) })]);
+      }
+      for (const p of filed) {
+        const [x, y] = p.rows;
+        if (pairs.some(([u, v]) => pairKey(u, v) === pairKey(x, y)) || !rows[x].registered || !rows[y].registered) continue;
+        const theirs = [x, y].map(row => pairs.find(pair => pair.includes(row))).filter(Boolean)
+          .map(([u, v]) => `${rows[u].name} v ${rows[v].name}`);
+        const later = [...exact].find(([r, ps]) => r !== round && ps.some(([u, v]) => pairKey(u, v) === pairKey(x, y)));
+        const has = later ? `the schedule has them playing in round ${later[0]}`
+          : theirs.length ? `the schedule has ${joinAnd([...new Set(theirs)])} in round ${round}` : `the schedule has no game for either team in round ${round}`;
+        const cause = causeOf(round, [x, y]);
+        roundGaps.push([Math.min(x, y), item('unscheduled', `Game not in the schedule: ${rows[x].name} v ${rows[y].name} in round ${round}`,
+          cause ? causeFix(cause) : 'Fix: Check the round and both team names in the game file against the schedule.',
+          `${fileName(p.game.path)} is ${rows[x].name} v ${rows[y].name} in round ${round}, but ${has}.`,
+          { round, teams: [rows[x].name, rows[y].name], ...caused(cause) })]);
+      }
+      gaps.push(...roundGaps.sort((u, v) => u[0] - v[0]).map(([, entry]) => entry));
+      continue;
+    }
     // A team with no game in a round its opponents played. One a wrong round inside explains gets that game's fix. The rest
-    // are judged within their pool (the teams joined by games), never across pools: exactly two that have not met are
-    // probably one missing game, so they make one item; in a pool with an odd number of teams one team sits out each
+    // are judged within their pool (the teams joined by games in this phase), never across pools: exactly two that have not
+    // met are probably one missing game, so they make one item; in a pool with an odd number of teams one team sits out each
     // round, so a lone gap there is probably a bye, and of three, the two that have not met are the missing game and the
     // third the bye. That needs a tournament file with every team of the pool in it (1.17.0, 23 Nov 2026); without one each
     // gap is a "no game" item. The page does not know the schedule, so it says "probably".
-    const roundGaps = [];   // [row index, item]
+    const k = phaseOf(round);
+    const ph = phases[k];
     const pools = new Map();   // group top -> uncaused gap rows
     for (const row of gapRows) {
       const cause = causeOf(round, [row.n - 1]);
-      if (cause) roundGaps.push([row.n - 1, item('nogame', `No game for ${row.name} in round ${round}`, causeFix(cause),
-        `Teams it plays have games in round ${round}, but no game file has ${row.name} in that round.`, { round, teams: [row.name], ...caused(cause) })]);
-      else pools.set(top(row.n - 1), [...(pools.get(top(row.n - 1)) ?? []), row]);
+      const byName = cause ? null : strayCause(round, [row.n - 1]);
+      if (cause || byName) roundGaps.push([row.n - 1, item('nogame', `No game for ${row.name} in round ${round}`, cause ? causeFix(cause) : strayFix(byName),
+        `Teams it plays have games in round ${round}, but no game file has ${row.name} in that round.`, { round, teams: [row.name], ...(cause ? caused(cause) : strayLink(byName)) })]);
+      else pools.set(topIn(ph, row.n - 1), [...(pools.get(topIn(ph, row.n - 1)) ?? []), row]);
     }
-    const missing = (x, y) => item('missing', `Game missing in round ${round}`, `Fix: Find the round ${round} game file for ${x.name} v ${y.name}.`,
-      `${x.name} and ${y.name} both have no game in round ${round}, and they have not played each other, so it is probably their game against each other. If they both had a bye, ignore this.`,
+    const missing = (x, y, rematch = false) => item('missing', `Game missing in round ${round}`, `Fix: Find the round ${round} game file for ${x.name} v ${y.name}.`,
+      rematch ? `${x.name} and ${y.name} both have no game in round ${round}. Their pool has an even number of teams, so every team plays each round, and it is probably their game against each other (they have met before). If round ${round} was a playoff they were not in, ignore this.`
+        : `${x.name} and ${y.name} both have no game in round ${round}, and they have not played each other, so it is probably their game against each other. If they both had a bye, ignore this.`,
       { round, teams: [x.name, y.name] });
     const bye = (row, size) => {
       row.cells[round].state = 'bye';
@@ -660,14 +926,15 @@ export function checkGames(entries, tournament) {
         `${row.name}'s pool (the teams it plays, and the teams they play) has ${size} teams, an odd number, so one of them has no game each round. No game file has ${row.name} in round ${round}.`,
         { round, teams: [row.name] });
     };
-    const notMet = (x, y) => !met.has(pairKey(x.n - 1, y.n - 1));
+    const notMet = (x, y) => !met(k, x.n - 1, y.n - 1);
     for (const [group, pool] of pools) {
-      const size = groupSize.get(group) ?? 0;
+      const size = ph.size.get(group) ?? 0;
       // A pool's size means something only when every team in it is a real one: with no tournament file, or a team not in
       // it, a misspelt name is a made-up extra team, and would turn an even pool odd.
-      const oddPool = Boolean(tournament) && groupKnown.get(group) === true && size % 2 === 1;
+      const oddPool = Boolean(tournament) && ph.known.get(group) === true && size % 2 === 1;
       const pairs = pool.flatMap((x, i) => pool.slice(i + 1).filter(y => notMet(x, y)).map(y => [x, y]));
       if (pool.length === 2 && pairs.length === 1) roundGaps.push([pool[0].n - 1, missing(...pool)]);
+      else if (pool.length === 2 && tournament && ph.known.get(group) === true && size % 2 === 0) roundGaps.push([pool[0].n - 1, missing(...pool, true)]);
       else if (oddPool && pool.length === 1) roundGaps.push([pool[0].n - 1, bye(pool[0], size)]);
       else if (oddPool && pool.length === 3 && pairs.length === 1) {
         const third = pool.find(row => !pairs[0].includes(row));
@@ -681,10 +948,57 @@ export function checkGames(entries, tournament) {
     }
     gaps.push(...roundGaps.sort((x, y) => x[0] - y[0]).map(([, entry]) => entry));
   }
-  for (const row of gridRows) {
-    if (row.registered && !hasGame.has(row.n - 1)) {
-      gaps.push(item('noneatall', `No games for ${row.name}`, 'Fix: Find its game files, unless it did not play.',
-        `${row.name} is in the tournament file, but no game file has it.`, { round: null, teams: [row.name] }));
+  // A pool of three has one game a round, so a missing game leaves no gap in it: nobody has a game that the others lack.
+  // In the first phase, a pool of exactly three whose game count is not a whole round robin (3, 6, ...) is short of the
+  // difference. When as many rounds of the phase as games are short have no game for it, those are the rounds; else the
+  // item names the pair that has met fewest times and no round (review 3).
+  if (starts.length) {
+    const ph = phases[0];
+    const phaseRounds = [...new Set(placed.filter(p => phaseOf(p.round) === 0).map(p => p.round))].sort((x, y) => x - y);
+    for (const root of new Set([...ph.has].map(i => topIn(ph, i)))) {
+      const team = [...ph.has].filter(i => topIn(ph, i) === root).sort((x, y) => x - y);
+      if (team.length !== 3) continue;
+      const own = placed.filter(p => phaseOf(p.round) === 0 && team.includes(p.rows[0]) && team.includes(p.rows[1]) && p.rows[0] !== p.rows[1]);
+      const short = Math.ceil(own.length / 3) * 3 - own.length;
+      if (!short || phaseRounds.some(r => exact.has(r))) continue;
+      const have = new Set(own.map(p => p.round));
+      const free = phaseRounds.filter(r => !have.has(r));
+      const meetings = new Map();
+      for (const p of own) meetings.set(pairKey(...p.rows), (meetings.get(pairKey(...p.rows)) ?? 0) + 1);
+      const pairs = team.flatMap((x, i) => team.slice(i + 1).map(y => [x, y]));
+      const [x, y, z] = team.map(i => rows[i].name);
+      for (let k = 0; k < short; k += 1) {
+        pairs.sort((u, v) => (meetings.get(pairKey(...u)) ?? 0) - (meetings.get(pairKey(...v)) ?? 0));
+        const [a, b] = pairs[0];
+        meetings.set(pairKey(a, b), (meetings.get(pairKey(a, b)) ?? 0) + 1);
+        const names2 = [rows[a].name, rows[b].name];
+        if (free.length === short) {
+          gaps.push(item('missing', `Game missing in round ${free[k]}`, `Fix: Find the round ${free[k]} game file for ${names2[0]} v ${names2[1]}.`,
+            `${x}, ${y} and ${z} are a pool of three, so one game is played in it each round, and none is filed in round ${free[k]}. ${names2[0]} and ${names2[1]} have met fewest times, so it is probably their game. If the pool had no round ${free[k]}, ignore this.`,
+            { round: free[k], teams: names2 }));
+        } else {
+          gaps.push(item('missing', `Game missing in the pool of ${x}, ${y} and ${z}`, `Fix: Find the missing game file for ${names2[0]} v ${names2[1]}.`,
+            `${x}, ${y} and ${z} have ${plural(own.length, 'game file')} between them, and a round robin of three has ${own.length + short}. ${names2[0]} and ${names2[1]} have met fewest times, so it is probably their game.`,
+            { round: null, teams: names2 }));
+        }
+      }
+    }
+  }
+  // A round the schedule names, after the last round with files or before the first, with no files at all (review 3).
+  if (seen.length) {
+    for (const entry of scheduled) {
+      if (!entry.games.length || roundsSeen.has(entry.round) || (entry.round > seen[0] && entry.round < seen.at(-1))) continue;
+      gaps.push(item('emptyround', `No game files for round ${entry.round} (in the schedule)`, `Fix: Find the round ${entry.round} game files, unless round ${entry.round} was not played.`,
+        `The schedule has ${plural(entry.games.length, 'game')} in round ${entry.round}, and no game file is in it.`, { round: entry.round, teams: [] }));
+    }
+  }
+  // With no game file at all, every team has "no games"; one line says so instead (summaryLines).
+  if (games.length) {
+    for (const row of gridRows) {
+      if (row.registered && !hasGame.has(row.n - 1)) {
+        gaps.push(item('noneatall', `No games for ${row.name}`, 'Fix: Find its game files, unless it did not play.',
+          `${row.name} is in the tournament file, but no game file has it.`, { round: null, teams: [row.name] }));
+      }
     }
   }
 
@@ -693,12 +1007,14 @@ export function checkGames(entries, tournament) {
   if (tournament) {
     const strayPlayers = new Map();
     for (const game of games) {
-      for (const side of game.sides) {
-        const row = rows[rowOf(side.name)];
+      for (const [s, side] of game.sides.entries()) {
+        const rowIndex = gameRows.get(game.path)[s];   // not rowOf(name): a side a self game moved to its real team counts there
+        const row = rows[rowIndex];
         if (!row.registered || !row.roster.length) continue;
         for (const player of side.players) {
-          if (row.roster.some(name => playerMatch(player, name) === 'same')) continue;
-          const key = `${rowOf(side.name)}\u0000${fold(player)}`;
+          // The same name only as YellowFruit takes it as one: lowercase (1.19.0). "Zoe Lee" for "Zoë Lee" is not.
+          if (row.roster.some(name => lower(name) === lower(player))) continue;
+          const key = `${rowIndex}\u0000${lower(player)}`;
           if (!strayPlayers.has(key)) strayPlayers.set(key, { name: player, team: row.name, roster: row.roster, games: new Set() });
           strayPlayers.get(key).games.add(game.path);
         }
@@ -713,6 +1029,7 @@ export function checkGames(entries, tournament) {
       const these = stray.games.size === 1 ? 'the game' : 'these games';
       const inThe = stray.games.size === 1 ? 'inside the game file' : 'inside the game files';
       const taken = yellowFruitPlayer(stray.name, stray.roster);
+      if (!closest && taken) closest = { name: taken, how: 'close' };   // what YellowFruit takes it for is the closest name
       const has = closest ? `${stray.team} has ${closest.name}${closest.how === 'initial' ? ' (same surname and first letter)' : ''}.`
         : `No name on ${stray.team}'s roster is close.`;
       const detail = [filesHave(stray.games, `a player called "${stray.name}" on ${stray.team}`), has, taken ? '' : `YellowFruit will refuse ${these} until it is changed.`].filter(Boolean).join(' ');
@@ -732,8 +1049,11 @@ export function checkGames(entries, tournament) {
   return {
     tournament: tournament ? { name: tournament.name, teams: registered.length } : null,
     counts: { games: games.length, modaq: modaq.length, other: other.length, bad: bad.length },
+    // What the check could not see (review 3): with no schedule for them, the last round of a later phase (the afternoon), where a
+    // missing game looks like a team that was knocked out.
+    notes: placed.some(p => phaseOf(p.round) > 0 && !exact.has(p.round)) ? [FINISHED_NOTE] : [],
     rounds,
-    grid: { rounds: gridRounds, rows: gridRows },
+    grid: { rounds: gridRounds, rows: games.length ? gridRows : [] },
     doubles,
     gaps,
     names,
@@ -746,6 +1066,7 @@ export function checkGames(entries, tournament) {
 
 // ---- The report's shape: the top line, the sections, Copy report -----------------------------------------------------------
 
+export const FINISHED_NOTE = "Skor can't tell a team that was knocked out from one whose last game in the afternoon is missing: check the afternoon's last round against the bracket.";
 export const BYE_LINE = 'A "no game" cell can be a bye: check it against the schedule.';
 export const MODAQ_HEAD = 'Not a game file YellowFruit can import: open it in MODAQ and use Export QBJ';
 export const NO_TOURNAMENT = 'Load the tournament file to check team names.';
@@ -756,14 +1077,16 @@ const GRID_KEY = [
   [cell => cell.state === 'bye', 'bye?: no game that round, probably a bye: its pool has an odd number of teams.'],
   [cell => cell.games.some(entry => entry.filedAs), "filed as: the name this team has in that game file, which is not the tournament file's."],
   [cell => cell.state === 'none', '–: none of the teams it plays had a game that round.'],
+  [cell => cell.state === 'finished', '–: its last game in this part of the event was in an earlier round (knocked out or finished).'],
+  [cell => cell.state === 'free', '–: the schedule gives this team no game that round.'],
 ];
 export const gridKey = rows => GRID_KEY.filter(([shows]) => rows.some(row => Object.values(row.cells).some(shows))).map(([, line]) => line);
 
-// A grid row with something to fix: a name not in the tournament file, a gap or a double, a game filed under another name,
-// or a game against itself. A probable bye is not.
+// A grid row with something to fix: a name not in the tournament file, a gap or a double, a game filed under a name
+// YellowFruit will not take, or a game against itself. A probable bye is not, nor a name YellowFruit takes on its own.
 export const needsFixing = (row, report) => Boolean(report.tournament && !row.registered)
   || Object.values(row.cells).some(cell => cell.state === 'gap' || cell.state === 'double'
-    || cell.games.some(entry => entry.filedAs || entry.opponent === row.n));
+    || cell.games.some(entry => (entry.filedAs && !entry.filedOk) || entry.opponent === row.n));
 
 const OPTIONAL = new Set(['bye', 'teamok', 'playerok']);
 const allItems = report => [...report.rounds, ...report.doubles, ...report.gaps, ...(report.names ?? []), ...(report.players ?? [])];
@@ -776,6 +1099,10 @@ export const clean = report => allItems(report).length === 0;
 // says how many follow from it. Items with no fix needed (probable byes, names YellowFruit matches) are named last.
 export function countLine(report) {
   const items = allItems(report);
+  if (!items.length && report.notes?.length) {
+    return report.names ? 'Nothing to fix that the page can see: the rounds agree and every name is in the tournament file.'
+      : 'Nothing to fix that the page can see in the rounds.';
+  }
   if (!items.length) {
     return report.names ? 'Nothing to fix: the rounds agree, no game is missing or doubled, and every name is in the tournament file.'
       : 'Nothing to fix in the rounds, and no game is missing or doubled.';
@@ -794,8 +1121,17 @@ export function countLine(report) {
     names ? `${names === 1 ? '1 name' : `${names} names`} YellowFruit will match on its own` : null].filter(Boolean);
   if (!total) return `Nothing needs fixing. Listed below with no fix needed: ${joinAnd(extras)}.`;
   const insides = new Set(following.map(entry => entry.cause)).size;
+  // What the causes are, in words: a wrong round inside, a game in the wrong round, or a team name not in the file.
+  const causeKinds = new Set(following.map(entry => entry.causeKind ?? 'inside'));
+  const many = insides !== 1;
+  const phrase = {
+    inside: many ? 'the wrong rounds inside game files' : 'the wrong round inside a game file',
+    moved: many ? 'games in the wrong round' : 'a game in the wrong round',
+    name: many ? 'team names that are not in the tournament file' : 'a team name that is not in the tournament file',
+  };
+  const from = causeKinds.size === 1 ? phrase[[...causeKinds][0]] : 'the items above';
   const follow = following.length ? ` ${following.length} more ${following.length === 1 ? 'problem' : 'problems'} listed`
-    + ` ${following.length === 1 ? 'comes' : 'come'} from the wrong ${insides === 1 ? 'round inside a game file' : 'rounds inside game files'},`
+    + ` ${following.length === 1 ? 'comes' : 'come'} from ${from},`
     + ` and ${following.length === 1 ? 'goes' : 'go'} once ${insides === 1 ? 'it is' : 'they are'} fixed.` : '';
   return `${plural(total, 'thing')} to fix: ${joinAnd(parts)}.${follow}${extras.length ? ` Also listed, with no fix needed: ${joinAnd(extras)}.` : ''}`;
 }
@@ -808,6 +1144,8 @@ export function summaryLines(report) {
   const rest = report.counts.modaq + report.counts.other + report.counts.bad;
   lines.push(`${plural(report.counts.games, 'game file')} read.${rest ? ` ${plural(rest, 'other file')} listed at the end.` : ''}`);
   if (report.counts.games) lines.push(countLine(report));
+  else lines.push('There are no game files to check. Choose the folder that holds them.');
+  if (report.counts.games) lines.push(...(report.notes ?? []));
   return lines;
 }
 

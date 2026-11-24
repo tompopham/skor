@@ -151,6 +151,9 @@ function cellNode(cell) {
   if (cell.state === 'double') return h('td', { class: 'double', title }, h('b', {}, `${cell.games.length} games`), games);
   if (cell.state === 'gap') return h('td', { class: 'gap' }, 'no game');
   if (cell.state === 'bye') return h('td', { class: 'bye' }, 'bye?');
+  // 'finished': its last game here was earlier; 'free': the schedule gives it no game that round. A dash, nothing to fix.
+  if (cell.state === 'finished') return h('td', { class: 'none', title: 'Its last game in this part of the event was in an earlier round.' }, '–');
+  if (cell.state === 'free') return h('td', { class: 'none', title: 'The schedule gives this team no game that round.' }, '–');
   return h('td', { class: 'none' }, '–');
 }
 
@@ -172,6 +175,8 @@ function gridSection(report) {
   const box = h('div', { class: 'gridbox' });
   let full = flagged.length === 0 ? null : false;   // null: hidden; false: flagged rows; true: every row
   const button = h('button', { class: 'btn noprint', type: 'button', id: 'grid-toggle' });
+  // Hidden behind its button, the grid prints nothing, so its heading must not print alone (1.19.0, finding 9(c)).
+  const heading = h('h3', {}, 'Team by round grid');
   const draw = () => {
     const rows = full ? all : full === false ? flagged : [];
     const showing = h('p', { class: 'hint', id: 'grid-showing' }, full ? `All ${all.length} teams.`
@@ -185,13 +190,14 @@ function gridSection(report) {
     button.textContent = full ? (flagged.length ? 'Show only teams with something to fix' : 'Hide the grid')
       : full === false ? `Show all ${all.length} teams` : `Show the grid (${all.length} teams)`;
     button.setAttribute('aria-expanded', String(rows.length > 0));
+    heading.classList.toggle('noprint', rows.length === 0);
   };
   button.addEventListener('click', () => {
     full = !full ? true : flagged.length ? false : null;
     draw();
   });
   draw();
-  return h('section', { class: 'job', id: 'job-grid' }, h('h3', {}, 'Team by round grid'), h('div', { class: 'acts noprint' }, button), box);
+  return h('section', { class: 'job', id: 'job-grid' }, heading, h('div', { class: 'acts noprint' }, button), box);
 }
 
 function drawReport() {
