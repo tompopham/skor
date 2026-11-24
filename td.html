@@ -48,6 +48,18 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 .report ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
 .report li { overflow-wrap: anywhere; }
 .report .files li { font-size: 14px; }
+/* The report's words (1.17.0, readability fixes): lines no wider than about 70 characters; each problem in the same shape,
+   the problem in bold, the fix on its own line, then the file and what YellowFruit will do in smaller grey text. */
+.report .sum, .report .items, #nothing-else, #names-none, .report .key, #grid-showing, #bye-line { max-width: 70ch; }
+.report .count { font-size: 16px; font-weight: bold; margin: 0; overflow-wrap: anywhere; }
+.report .job > h3 { font-size: 14px; color: var(--muted); }
+.report ul.items { list-style: none; padding-left: 0; gap: 12px; }
+.report .item { display: grid; gap: 2px; }
+.report .item .fix { margin: 0; }
+.report .item .more { margin: 0; color: var(--muted); font-size: 14px; }
+.report ul.key { font-size: 14px; color: var(--muted); gap: 2px; }
+.grid .opp { display: block; }
+.gridbox { display: grid; gap: 8px; min-width: 0; }
 textarea { width: 100%; min-height: 120px; font: 13px/1.3 Arial, Helvetica, sans-serif; border: 1px solid var(--line); border-radius: 0; }
 .tablewrap { overflow-x: auto; max-width: 100%; }
 table { border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
@@ -55,11 +67,19 @@ th, td { text-align: left; padding: 4px 6px; border: 1px solid var(--line); vert
 thead th { background: var(--btn); }
 /* The team name stays in view while the rounds scroll sideways. */
 .grid th.team { position: sticky; left: 0; background: var(--bg); white-space: normal; min-width: 180px; max-width: 260px; font-weight: normal; overflow-wrap: anywhere; }
-@media (max-width: 560px) { .grid th.team { min-width: 120px; max-width: 140px; } }
 .grid thead th.team { background: var(--btn); font-weight: bold; }
 .grid td.none { color: var(--offfg); }
 .grid td.gap, .grid td.double { font-weight: bold; }
-.grid .note { display: block; font-weight: normal; }
+.grid td.bye { color: var(--muted); }
+.grid .note { display: block; font-weight: normal; font-size: 13px; color: var(--muted); }
+.grid td.game, .grid td.double { white-space: normal; min-width: 8em; max-width: 14em; overflow-wrap: anywhere; hyphens: auto; }
+/* On a phone the cells are narrower, so three rounds fit beside the team names without scrolling sideways. */
+@media (max-width: 560px) {
+  .grid th.team { min-width: 84px; max-width: 104px; }
+  .grid { font-size: 13px; }
+  .grid th, .grid td { padding: 4px; }
+  .grid td.game, .grid td.double { min-width: 4.5em; max-width: 9em; }
+}
 /* Standings and afternoon brackets (1.16.0). One column that never grows past the page: a select is as wide as its longest
    choice, and a table scrolls inside its own box. */
 #standings { grid-template-columns: minmax(0, 1fr); }
@@ -84,6 +104,7 @@ body.dropping .shell { outline: 2px dashed var(--fg); outline-offset: -4px; }
   .grid th.team { position: static; min-width: 0; }
   th, td { white-space: normal; }
   table, .report li { font-size: 9pt; }
+  .report .item .more { font-size: 8pt; }
   .job { break-inside: avoid-page; }
 }
 </style>

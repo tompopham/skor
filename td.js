@@ -11,7 +11,8 @@ import { readTournamentFile } from './schedule.js';
 import { initSchedule } from './td-schedule.js';
 import { initStandings } from './td-standings.js';
 import {
-  MAX_BYTES, fileKind, tooBig, readGame, checkGames, reportText, summaryLines, BYE_LINE, MODAQ_HEAD, NO_TOURNAMENT,
+  MAX_BYTES, fileKind, tooBig, readGame, checkGames, reportText, summaryLines, sections, nothingElse, needsFixing, gridKey,
+  BYE_LINE, MODAQ_HEAD, NO_TOURNAMENT,
 } from './td-check.js';
 
 const $ = id => document.getElementById(id);
@@ -127,31 +128,70 @@ async function droppedItems(transfer) {
 
 // ---- The report -------------------------------------------------------------------------------------------------------------
 
-// A report line: text, with the bold parts bold. Text goes in as text, never as markup.
-const lineNode = (tag, item) => h(tag, {}, (Array.isArray(item.line) ? item.line : [item.line]).map(part => (typeof part === 'string' ? part : h('b', {}, part.b))));
-const listOf = (items, id) => h('ul', { id }, items.map(item => lineNode('li', item)));
-const noneLine = (id, text) => h('p', { class: 'hint', id }, text);
+// Each problem in the same shape (td-check.js builds the words): the problem in bold, the fix on its own line, then the
+// file and what YellowFruit will do in small print. Text goes in as text, never as markup.
+const itemNode = entry => h('li', { class: 'item' },
+  h('b', { class: 'what' }, entry.title), h('p', { class: 'fix' }, entry.fix), h('p', { class: 'more' }, entry.detail));
+const fileList = (lines, id) => h('ul', { id, class: 'filelist' }, lines.map(line => h('li', {}, line)));
 
-// One cell of the grid: the opponent's row number ("v 7"), "2 games", "no game", or a dash for a round its group did
-// not play. A star marks a game filed under another name (section 3).
+// A long team name is cut in the middle, so both ends stay ("Winter of C…tent quads 2"); the cell's title has it whole.
+const short = name => {
+  const chars = Array.from(name);
+  return chars.length > 24 ? `${chars.slice(0, 12).join('')}…${chars.slice(-10).join('')}` : name;
+};
+
+// One cell of the grid: the opponent ("v Puffin Institute"), with "filed as ..." under it when this team's name in that
+// game file is not the tournament file's; "2 games" and both opponents; "no game"; "bye?" for a probable bye (an odd pool);
+// or a dash for a round none of the teams it plays had a game in.
 function cellNode(cell) {
-  const opponents = cell.games.map(entry => `v ${entry.opponent}${entry.filedAs ? '*' : ''}`).join(', ');
   const title = cell.games.map(entry => `${entry.path}: v ${entry.opponentName}${entry.filedAs ? ` (filed as "${entry.filedAs}")` : ''}`).join('\n');
-  if (cell.state === 'game') return h('td', { class: 'game', title }, opponents);
-  if (cell.state === 'double') return h('td', { class: 'double', title }, `${cell.games.length} games`, h('span', { class: 'note' }, opponents));
+  const games = cell.games.map(entry => h('span', { class: 'opp' }, `v ${short(entry.opponentName)}`,
+    entry.filedAs ? h('span', { class: 'note' }, `filed as "${short(entry.filedAs)}"`) : null));
+  if (cell.state === 'game') return h('td', { class: 'game', title }, games);
+  if (cell.state === 'double') return h('td', { class: 'double', title }, h('b', {}, `${cell.games.length} games`), games);
   if (cell.state === 'gap') return h('td', { class: 'gap' }, 'no game');
+  if (cell.state === 'bye') return h('td', { class: 'bye' }, 'bye?');
   return h('td', { class: 'none' }, '–');
 }
 
-function gridTable(report) {
-  const { rounds, rows } = report.grid;
+function gridTable(report, rows) {
+  const { rounds } = report.grid;
   return h('div', { class: 'tablewrap', id: 'grid-wrap', tabindex: '0', role: 'region', 'aria-label': 'Team by round grid; it scrolls sideways' },
     h('table', { class: 'grid', id: 'grid' },
-      h('caption', { class: 'hint' }, 'Team by round grid'),
       h('thead', {}, h('tr', {}, h('th', { class: 'team', scope: 'col' }, 'Team'), rounds.map(round => h('th', { scope: 'col' }, `R${round}`)))),
       h('tbody', {}, rows.map(row => h('tr', {},
-        h('th', { class: 'team', scope: 'row' }, `${row.n}. ${row.name}${report.tournament && !row.registered ? ' (not in the tournament file)' : ''}`),
+        h('th', { class: 'team', scope: 'row' }, `${row.name}${report.tournament && !row.registered ? ' (not in the tournament file)' : ''}`),
         rounds.map(round => cellNode(row.cells[round])))))));
+}
+
+// The grid shows only the teams with something to fix, unless the TD asks for every team. With nothing to fix it starts
+// hidden, behind its button.
+function gridSection(report) {
+  const all = report.grid.rows;
+  const flagged = all.filter(row => needsFixing(row, report));
+  const box = h('div', { class: 'gridbox' });
+  let full = flagged.length === 0 ? null : false;   // null: hidden; false: flagged rows; true: every row
+  const button = h('button', { class: 'btn noprint', type: 'button', id: 'grid-toggle' });
+  const draw = () => {
+    const rows = full ? all : full === false ? flagged : [];
+    const showing = h('p', { class: 'hint', id: 'grid-showing' }, full ? `All ${all.length} teams.`
+      : `Only the ${flagged.length === 1 ? 'team' : `${flagged.length} teams`} with something to fix.`);
+    // The key explains only the marks in the rows shown; the bye line goes with a "no game" cell.
+    const key = gridKey(rows);
+    const gap = rows.some(row => Object.values(row.cells).some(cell => cell.state === 'gap'));
+    box.replaceChildren(...(rows.length ? [showing, gridTable(report, rows),
+      key.length ? h('ul', { class: 'key', id: 'grid-key' }, key.map(line => h('li', {}, line))) : null,
+      gap ? h('p', { class: 'hint', id: 'bye-line' }, BYE_LINE) : null].filter(Boolean) : []));
+    button.textContent = full ? (flagged.length ? 'Show only teams with something to fix' : 'Hide the grid')
+      : full === false ? `Show all ${all.length} teams` : `Show the grid (${all.length} teams)`;
+    button.setAttribute('aria-expanded', String(rows.length > 0));
+  };
+  button.addEventListener('click', () => {
+    full = !full ? true : flagged.length ? false : null;
+    draw();
+  });
+  draw();
+  return h('section', { class: 'job', id: 'job-grid' }, h('h3', {}, 'Team by round grid'), h('div', { class: 'acts noprint' }, button), box);
 }
 
 function drawReport() {
@@ -174,42 +214,27 @@ function drawReport() {
     copyBox.hidden = copied;
     if (!copied) copyBox.select();
   };
-  const doublesAndGaps = [...report.doubles, ...report.gaps];
-  const sections = [
+  const after = nothingElse(report);
+  const view = [
     h('h2', {}, 'Report'),
-    h('div', {}, summaryLines(report).map((line, i) => h('p', { class: i === 2 ? 'status' : 'hint', id: `summary-${i}` }, line))),
+    h('div', { class: 'sum' }, summaryLines(report).map((line, i) => h('p', { class: i === 2 ? 'count' : 'hint', id: `summary-${i}` }, line))),
     h('div', { class: 'acts noprint' },
       h('button', { class: 'btn', type: 'button', id: 'copy-report', onclick: copy }, 'Copy report'),
       h('button', { class: 'btn', type: 'button', id: 'print-report', onclick: () => window.print() }, 'Print')),
     copyMsg, copyBox,
-    h('section', { class: 'job', id: 'job-rounds' },
-      h('h3', {}, `1. Round does not match (${report.rounds.length})`),
-      report.rounds.length ? listOf(report.rounds, 'rounds-list')
-        : noneLine('rounds-none', 'None: wherever the folder, the file name and the file give a round, they agree.')),
-    h('section', { class: 'job', id: 'job-grid' },
-      h('h3', {}, `2. Team by round grid: doubles and gaps (${doublesAndGaps.length})`),
-      h('p', { class: 'status', id: 'bye-line' }, BYE_LINE),
-      doublesAndGaps.length ? listOf(doublesAndGaps, 'grid-list')
-        : noneLine('grid-none', 'None: no team has two games in a round, or none in a round its opponents played.'),
-      report.grid.rows.length ? gridTable(report) : null,
-      report.grid.rows.length
-        ? h('p', { class: 'hint', id: 'grid-key' }, 'v 7: played team 7. *: filed under another name (see 3). no game: the teams it meets, and theirs, played that round. –: none of them played that round.')
-        : null),
-    h('section', { class: 'job', id: 'job-names' },
-      h('h3', {}, `3. Names not in the tournament file${report.names ? ` (${report.names.length})` : ''}`),
-      !report.names ? noneLine('names-none', NO_TOURNAMENT)
-        : report.names.length ? listOf(report.names, 'names-list') : noneLine('names-none', 'None: every team name is in the tournament file.'),
-      report.players ? h('h3', {}, `Players not on their team's roster (${report.players.length})`) : null,
-      !report.players ? null
-        : report.players.length ? listOf(report.players, 'players-list') : noneLine('players-none', 'None: every player is on their team\'s roster.')),
+    sections(report).map(section => h('section', { class: 'job', id: `job-${section.id}` },
+      h('h3', {}, section.heading), h('ul', { class: 'items', id: `${section.id}-list` }, section.items.map(itemNode)))),
+    after ? h('p', { class: 'status', id: 'nothing-else' }, after) : null,
+    report.names ? null : h('p', { class: 'status', id: 'names-none' }, NO_TOURNAMENT),
+    report.grid.rows.length ? gridSection(report) : null,
     report.modaq.length ? h('section', { class: 'job files', id: 'files-modaq' },
-      h('h3', {}, `${MODAQ_HEAD} (${report.modaq.length})`), listOf(report.modaq.map(path => ({ line: [path] })), 'modaq-list')) : null,
+      h('h3', {}, `${MODAQ_HEAD} (${report.modaq.length})`), fileList(report.modaq, 'modaq-list')) : null,
     report.bad.length ? h('section', { class: 'job files', id: 'files-bad' },
-      h('h3', {}, `Could not be read (${report.bad.length})`), listOf(report.bad, 'bad-list')) : null,
+      h('h3', {}, `Could not be read (${report.bad.length})`), fileList(report.bad.map(entry => entry.line[0]), 'bad-list')) : null,
     report.other.length ? h('section', { class: 'job files', id: 'files-other' },
-      h('h3', {}, `Skipped: not .qbj files (${report.other.length})`), listOf(report.other.map(path => ({ line: [path] })), 'other-list')) : null,
+      h('h3', {}, `Skipped: not .qbj files (${report.other.length})`), fileList(report.other, 'other-list')) : null,
   ];
-  root.replaceChildren(...sections.filter(Boolean));
+  root.replaceChildren(...view.flat().filter(Boolean));
   root.hidden = false;
 }
 
