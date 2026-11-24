@@ -7,7 +7,7 @@ import { h } from './dom.js';
 import { readPacket } from './packet.js';
 import { packetAllowed } from './packet-match.js';
 import { listPackets, removePacket, savePacket, loadSetNames, NEARLY_FULL_TEXT } from './storage.js';
-import { setList, packetCount, fetchPacket, parseDocx } from './qbreader.js';
+import { setList, setListIsStale, packetCount, fetchPacket, parseDocx } from './qbreader.js';
 
 export const PACKET_WIDTH = 1024;
 export const NARROW_TEXT = `Packet mode needs a laptop window at least ${PACKET_WIDTH} px wide.`;
@@ -81,10 +81,15 @@ export function packetContent(draft, api, redraw) {
   const numberBox = h('select', { id: 'qb-number', 'aria-label': 'Packet number' }, h('option', { value: '' }, 'Packet'));
   const fillNumbers = n => { numberBox.replaceChildren(h('option', { value: '' }, 'Packet'), ...Array.from({ length: n }, (_, k) => h('option', { value: String(k + 1) }, `Packet ${k + 1}`))); };
   if (draft.qbCount) { fillNumbers(draft.qbCount); numberBox.value = draft.qbNumber ?? ''; }
+  const showSets = names => sets.replaceChildren(...names.map(name => h('option', { value: name })));
+  // On the box's first focus in this drawing of the pane: fetch if nothing is kept, or in the background if the kept list is
+  // more than 7 days old (Skor 1.18.0). A failed fetch keeps the old options and says nothing: the person may be offline.
   setBox.addEventListener('focus', async () => {
-    if (sets.children.length > 0) return;
-    const got = await setList();
-    if (got.ok) sets.replaceChildren(...got.sets.map(name => h('option', { value: name })));
+    const stale = setListIsStale(loadSetNames());
+    if (sets.children.length > 0 && !stale) return;
+    const got = await setList({ refresh: stale });
+    if (got.ok && !got.refreshFailed) showSets(got.sets);
+    else if (got.ok && sets.children.length === 0) showSets(got.sets);
   }, { once: true });
   setBox.addEventListener('change', async () => {
     if (setBox.value.trim() === draft.qbSet && draft.qbCount) return;   // the same set again (a second change on leaving the box)
@@ -111,8 +116,23 @@ export function packetContent(draft, api, redraw) {
       keep(got, 'qbreader');
     },
   }, 'Load');
+  // Refresh list always fetches, and says how it went in the message line; a failed fetch keeps the old list.
+  const qbRefresh = h('button', {
+    type: 'button', class: 'btn small', id: 'qb-refresh',
+    onclick: async () => {
+      qbRefresh.disabled = true;
+      say('Updating the set list…');
+      const got = await setList({ refresh: true });
+      qbRefresh.disabled = false;
+      if (got.ok && !got.refreshFailed) {
+        showSets(got.sets);
+        say(`Set list updated: ${got.sets.length.toLocaleString('en-GB')} ${got.sets.length === 1 ? 'set' : 'sets'}.`);
+      } else if (got.ok) say(`${got.refreshFailed} The old list is kept.`, true);
+      else say(got.message, true);
+    },
+  }, 'Refresh list');
   const qbRow = h('div', { class: 'group', id: 'qb-row' }, h('h3', {}, 'From qbreader'),
-    h('div', { class: 'qbrow' }, setBox, numberBox, qbLoad), sets);
+    h('div', { class: 'qbrow' }, setBox, numberBox, qbLoad), h('div', { class: 'qbrefresh' }, qbRefresh), sets);
 
   const fileRow = h('div', { class: 'group', id: 'packet-files' }, h('h3', {}, 'From a file'),
     h('div', { class: 'grid2' },

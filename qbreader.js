@@ -39,14 +39,31 @@ async function jsonOf(response) {
 }
 const query = params => new URLSearchParams(params).toString();
 
-// qbreader's set names for the suggestions: the kept list unless `refresh` (or none is kept), else fetched and kept.
+// How old a kept set list may get before it is fetched again in the background (Skor 1.18.0).
+export const SET_LIST_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+// True when the kept list ({ sets, fetchedAt }, or null) should be fetched again: none kept, no usable fetch time, more than
+// 7 days old, or fetched in the future (the device's clock was changed). Pure: `now` is passed in.
+export function setListIsStale(kept, now = Date.now()) {
+  if (!kept || typeof kept.fetchedAt !== 'number' || !Number.isFinite(kept.fetchedAt)) return true;
+  const age = now - kept.fetchedAt;
+  return age < 0 || age > SET_LIST_MAX_AGE_MS;
+}
+
+// qbreader's set names for the suggestions: the kept list unless `refresh` (or none is kept), else fetched and kept. A refresh
+// that fails keeps the old list, returns it with ok: true and says why in `refreshFailed`; with none kept it returns { ok: false, message }.
 export async function setList({ fetchFn = defaultFetch, store, now = Date.now(), refresh = false, timeoutMs } = {}) {
   const kept = loadSetNames(store);
   if (kept && !refresh) return { ok: true, ...kept };
   const response = await get(fetchFn, `${QBREADER}/set-list`, {}, timeoutMs);
   const body = response?.ok ? await jsonOf(response) : undefined;
   const sets = Array.isArray(body?.setList) ? body.setList.filter(name => typeof name === 'string') : null;
-  if (!sets) return kept ? { ok: true, ...kept } : { ok: false, message: response ? `qbreader answered with an error (${response.status}). Try again later, or load a packet file.` : NO_SIGNAL };
+  if (!sets) {
+    const message = !response ? NO_SIGNAL
+      : response.ok ? 'qbreader sent something that is not a set list. Try again later, or load a packet file.'
+        : `qbreader answered with an error (${response.status}). Try again later, or load a packet file.`;
+    return kept ? { ok: true, ...kept, refreshFailed: message } : { ok: false, message };
+  }
   saveSetNames(sets, now, store);
   return { ok: true, sets, fetchedAt: now };
 }
